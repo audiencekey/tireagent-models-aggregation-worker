@@ -51,58 +51,38 @@ type ProductsFetchData = {
 const FETCH_LIMIT = 500;
 
 export default {
+
+	// show UI, execute functionality due to selected URL
 	async fetch(request, env): Promise<Response> {
 		const url = new URL(request.url);
 		const pathname = url.pathname;
-		switch (pathname) {
-			case '/start':
-				await env.MODELS_AGGREGATION_FETCH_QUEUE.send(0);
-				return getResponse('Started');
-			case '/init':
-				try {
-					const { results } = await env.MODELS_AGGREGATION_DB.prepare(initTablesStmt)
-						.all();
-					return getResponse('initialized ' + JSON.stringify(results));
-				} catch(e) {
-					console.log(e);
-					
-					return new Response('Unable to init database, ' + e)
-				}
-
-			case '/preview':
-				let content = '';
-				try {
-					const models = await env.MODELS_AGGREGATION_DB.prepare(
-						'SELECT * FROM Models'
-					)
-						.all();
-					const brands = await env.MODELS_AGGREGATION_DB.prepare(
-						'SELECT * FROM Brands'
-					)
-						.all();
-					const products = await env.MODELS_AGGREGATION_DB.prepare(
-						'SELECT * FROM Products'
-					)
-						.all();
-						
-					content = '<hr/>' + renderList('Brands', brands.results) + "<hr />" + renderList('Models', models.results) + '<hr/>' + renderList('Produtcs', products.results);
-				} catch(e) {
-					content = 'Initialize database first (press RESET)'
-				}
-				return getResponse(content);
-
-			default: 
-				return getResponse('Initialize DB before previewing or processing');
+		const handlersMap: Record<string, (env: Env) => Promise<Response>> = {
+			'/start': startProcessing,
+			'/init': initializeDatabase,
+			'/preview': previewData,
+			'/': showHomePage
 		}
 
+		const handler = handlersMap[pathname];
+
+		if (!handler) {
+			return Response.redirect(url.origin);
+		}
+
+		return await handler(env);
 	},
 
-	async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext) {
+	/** 
+	 * handle queue messages
+	 * take query offset to get data chunk from the API and save to the D1 database
+	 */
+	async queue(batch: MessageBatch<unknown>, env: Env) {
+		
 		const offset = Number(batch.messages[0].body);
 		
 		console.log('handle queue item with offset', offset);
 		
-		const {items, hasNextPage, totalItems} = await fetchItems(offset);
+		const {items, hasNextPage, totalItems} = await fetchItems(offset, env);
 		console.log(items.length);
 		
 		
@@ -117,23 +97,79 @@ export default {
 
 		// console.log('hasNextPage', hasNextPage);
 
-		console.log(`Processed ${offset + items.length} items out of ${totalItems}`);
-		
-		
+		console.log(`Processed ${offset + items.length} items out of ${totalItems}`);		
 
 		if (hasNextPage) {
 			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(offset + FETCH_LIMIT);
 		} else {
 			console.log('END!!!');
-			
 		}
 
 	}
 } satisfies ExportedHandler<Env>;
 
+// send message to the queue with 0 offset to start data processing
+async function startProcessing(env: Env): Promise<Response> {
+	await env.MODELS_AGGREGATION_FETCH_QUEUE.send(0);
+	return getResponse('Started');
+}
+
+// show static page with base info
+async function showHomePage(): Promise<Response> {
+	return Promise.resolve(getResponse(`
+		<h1>
+			Initialize DB before previewing or processing.<br/>
+			WARNING!!! all existing data will be deleted pemanently!
+		</h1>
+	`));
+}
+
+// (re)initialize database
+async function initializeDatabase(env: Env): Promise<Response> {
+	try {
+		const { results } = await env.MODELS_AGGREGATION_DB.prepare(initTablesStmt)
+			.all();
+		return getResponse('initialized ' + JSON.stringify(results));
+	} catch(e) {
+		console.log(e);
+		
+		return new Response('Unable to init database, ' + e)
+	}
+}
+
+// show page with all brands, models and products from D1 database
+// TODO decide what to do with this page since there can be too many products to show at once
+async function previewData(env: Env): Promise<Response> {
+	let content = '';
+	try {
+		const [models, brands, products] = await Promise.all([
+			getAllEntriesFromDbByQuery('SELECT * FROM Models', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM Brands', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM Products', env),
+		]);	
+		content = `<hr/> 
+			${renderList('Brands', brands.results)}
+			<hr />
+			${renderList('Models', models.results)}
+			<hr/>
+			${renderList('Produtcs', products.results)}`;
+	} catch(e) {
+		content = '<h3>Initialize database first</h3>'
+	}
+
+	return getResponse(content);
+}
+
+// get all entries from the D1 database by given query
+async function getAllEntriesFromDbByQuery(query: string, env: Env) {
+	return await env.MODELS_AGGREGATION_DB.prepare(query)
+		.all();
+}
+
+// generate basic page with given content
 function getResponse(content: string): Response {
 	const menu = `
-		<div>
+		<div style="display: flex; gap: 20px;">
 			<div>
 				<a href="/init">(RE)INITIALIZE DATABASE</a>
 			</div>
@@ -141,7 +177,7 @@ function getResponse(content: string): Response {
 				<a href="/start">START PROCESSING</a>
 			</div>
 			<div>
-				<a href="/preview">PREVIEW DATA</a>
+				<a href="/preview">PREVIEW PARSED DATA</a>
 			</div>
 		</div>
 	`;
@@ -155,6 +191,7 @@ function getResponse(content: string): Response {
 	})
 }
 
+// convert items list to the HTML string
 function renderList(title: string, items: Array<any>): string {
 	let str = '<div>';
 	str += `<h2>${title}</h2>`
@@ -168,8 +205,20 @@ function renderList(title: string, items: Array<any>): string {
 	return str;
 }
 
-async function fetchItems(offset: number): Promise<ProductsFetchData> {
-	// Now we use filter by model name to prevent all tires parsing. (Remove filter for real data mapping)
+// fetch data from the API by given offset
+async function fetchItems(offset: number, env: Env): Promise<ProductsFetchData> {
+	type TAllTiresResponse = {
+		data: {
+			allTires: {
+				items: Product[], 
+				pageInfo: {
+					hasNextPage: boolean, 
+					totalCount: number
+				}
+			}
+		}
+	}
+	// TODO Now we use filter by model name to prevent all tires parsing. (Remove filter for real data mapping)
 	const requestData = JSON.stringify({
 		query: `query AllTires {
 			allTires(limit: ${FETCH_LIMIT}, offset: ${offset}, modelName: "AT") {
@@ -231,26 +280,35 @@ async function fetchItems(offset: number): Promise<ProductsFetchData> {
 			body: requestData,
 			headers: {
 				'Content-Type': 'application/json',
-				'x-api-key': 'b798bc72354a6d7256496c852508f054',
-				'x-bot-bypass': '3dedee46815eff572aa1a1c1d3cb79be'
+				'x-api-key': env.API_KEY,
+				'x-bot-bypass': env.BOT_BYPASS_KEY
 			}
 		}
 	);
 
-	const json = await response.json();
-	const allTires: {items: Product[], pageInfo: {hasNextPage: boolean, totalCount: number}} = json.data.allTires;
+	const json: TAllTiresResponse = await response.json();
+	console.log(json);
+	
+	const {
+		items, 
+		pageInfo: {
+			hasNextPage, 
+			totalCount
+		}
+	} = json.data.allTires;
 
 	return {
-		items: allTires.items, 
-		hasNextPage: allTires.pageInfo.hasNextPage,
-		totalItems: allTires.pageInfo.totalCount
+		items, 
+		hasNextPage,
+		totalItems: totalCount
 	};
 }
 
+// save item and corresponding brand and model to the D1 database
 async function processItem(product: Product, env: Env) {
 	// console.log('processing item', product.id);
 	
-	let brandId: number | null = await checkIfBrandExists(product.brand, env);
+	let brandId: number | null = await getBrandId(product.brand, env);
 
 	if (!brandId) {
 		// console.log('brand', product.brand, 'does not exist');
@@ -259,7 +317,7 @@ async function processItem(product: Product, env: Env) {
 	}
 
 	if (brandId) {
-		let modelId: number | null = await checkIfModelExists(product.modelName, brandId, env);
+		let modelId: number | null = await getModelId(product.modelName, brandId, env);
 		if (!modelId) {
 			modelId = await addModel(product.modelName, brandId, product.modelTaxonId, env);
 		}
@@ -271,7 +329,8 @@ async function processItem(product: Product, env: Env) {
 	
 }
 
-async function checkIfBrandExists(brandName: string, env: Env): Promise<number | null> {
+// find brand in the D1 database by name and return it's id. Return null if brand does not exist
+async function getBrandId(brandName: string, env: Env): Promise<number | null> {
 	const { results } = await env.MODELS_AGGREGATION_DB.prepare(
 			`SELECT * FROM Brands
 				WHERE brandName = ?`
@@ -282,6 +341,7 @@ async function checkIfBrandExists(brandName: string, env: Env): Promise<number |
 	return Number(results?.[0]?.brandId) || null;
 }
 
+// add new brand to the D1 database
 async function addBrand(brandName: string, env: Env): Promise<number | null> {
 	await env.MODELS_AGGREGATION_DB.prepare(`
 		INSERT INTO Brands (brandName)
@@ -299,7 +359,8 @@ async function addBrand(brandName: string, env: Env): Promise<number | null> {
 	return Number(results[0]?.['last_insert_rowid()']) || null;
 }
 
-async function checkIfModelExists(modelName: string, brandId: number, env: Env): Promise<number | null> {
+// find model in the D1 database by name and return it's id. Return null if model does not exist
+async function getModelId(modelName: string, brandId: number, env: Env): Promise<number | null> {
 	const { results } = await env.MODELS_AGGREGATION_DB.prepare(
 			`SELECT * FROM Models
 				WHERE modelName = ? AND brandId = ?`
@@ -310,6 +371,7 @@ async function checkIfModelExists(modelName: string, brandId: number, env: Env):
 	return Number(results?.[0]?.modelId) || null;
 }
 
+// add new model to the D1 database
 async function addModel(modelName: string, brandId: number, modelTaxonId: string, env: Env): Promise<number | null> {
 	await env.MODELS_AGGREGATION_DB.prepare(`
 		INSERT INTO Models (modelName, brandId, modelTaxonId)
@@ -327,6 +389,7 @@ async function addModel(modelName: string, brandId: number, modelTaxonId: string
 	return Number(results[0]?.['last_insert_rowid()']) || null;
 }
 
+// add new product to the D1 database
 async function addProduct(productData: Product, modelId: number, env: Env) {
 	const result = await env.MODELS_AGGREGATION_DB.prepare(`
 		INSERT INTO Products (
@@ -407,5 +470,4 @@ async function addProduct(productData: Product, modelId: number, env: Env) {
 	.run();
 
 	// console.log('Product' + productData.id + ' added');
-	
 }

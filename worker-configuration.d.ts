@@ -4,4 +4,6 @@ interface Env {
     MODELS_AGGREGATION_FETCH_QUEUE: Queue<any>;
     MODELS_AGGREGATION_PROCESS_QUEUE: Queue<any>;
     MODELS_AGGREGATION_DB: D1Database;
+    API_KEY: string;
+    BOT_BYPASS_KEY: string;
 }
