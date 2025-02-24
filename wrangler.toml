@@ -24,7 +24,7 @@ enabled = true
 # - https://developers.cloudflare.com/workers/configuration/secrets/
 [vars]
 # MY_VARIABLE = "production_value"
-API_KEY = "b798bc72354a6d7256496c852508f054"
+API_KEY = "d28d69a2c198b40214da950e1e71735e"
 BOT_BYPASS_KEY = "3dedee46815eff572aa1a1c1d3cb79be"
 
 # Bind the Workers AI model catalog. Run machine learning models, powered by serverless GPUs, on Cloudflare’s global network
@@ -76,9 +76,9 @@ database_id = "b717771c-4795-4261-b76c-39ea6136470c"
 
 # Bind a KV Namespace. Use KV as persistent storage for small key-value pairs.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#kv-namespaces
-# [[kv_namespaces]]
-# binding = "MY_KV_NAMESPACE"
-# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+[[kv_namespaces]]
+binding = "PRODUCTS_AGGREGATION_KV"
+id = "4e1fcb23d54447279a4bf433a5c5a7a4"
 
 # Bind an mTLS certificate. Use to present a client certificate when communicating with another service.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#mtls-certificates

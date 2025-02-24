@@ -1,52 +1,13 @@
+import { LAST_UPDATE_KV_KEY, TProductType } from './common';
 import { initTablesStmt } from './init';
+import { processTires } from './tires';
+import { processWheels } from './wheels';
 
-type Product = {
-	availability: string;
-	brand: string;
-	currency: string;
-	description: string;
-	dualLoadIndex: number;
-	dualMaxInflationPressure: number;
-	dualMaxLoad: number;
-	featured: boolean;
-	id: string;
-	imageUrl: string;
-	loadIndex: number;
-	maxInflationPressure: number;
-	maxLoad: number;
-	modelName: string;
-	modelTaxonId: string;
-	mpn: string;
-	overallDiameter: number;
-	price: number;
-	revsPerMile: number;
-	rimWidthRange: string;
-	roadCondition: string;
-	sectWidth: number;
-	sidewall: string;
-	sizeDesc: string;
-	sku: string;
-	speedRating: string;
-	temperature: string;
-	traction: string;
-	treadDepth: number;
-	treadType: string;
-	treadwear: string;
-	url: string;
-	utqg: string;
-	warranty: string;
-	size: {
-		aspectRatio: number;
-		diameter: number;
-		width: number;
-	}
-}
-
-type ProductsFetchData = {
-	items: Product[];
-	hasNextPage: boolean;
-	totalItems: number;
-}
+type TRawQueueMessage = {
+	type: TProductType;
+	offset: number;
+	lasUpdate?: string;
+};
 
 const FETCH_LIMIT = 500;
 
@@ -59,9 +20,11 @@ export default {
 		const handlersMap: Record<string, (env: Env) => Promise<Response>> = {
 			'/start': startProcessing,
 			'/init': initializeDatabase,
+			'/update': updateDatabase,
 			'/preview': previewData,
-			'/': showHomePage
-		}
+			'/': showHomePage,
+			'/export': exportDatabase
+		};
 
 		const handler = handlersMap[pathname];
 
@@ -77,40 +40,59 @@ export default {
 	 * take query offset to get data chunk from the API and save to the D1 database
 	 */
 	async queue(batch: MessageBatch<unknown>, env: Env) {
-		
-		const offset = Number(batch.messages[0].body);
-		
-		console.log('handle queue item with offset', offset);
-		
-		const {items, hasNextPage, totalItems} = await fetchItems(offset, env);
-		console.log(items.length);
-		
-		
-		for(let item of items) {
-			try {
-				await processItem(item, env);
-			} catch(e) {
-				console.log('Unable to process item', item);
-				console.log(e);
-			}
+		let message: TRawQueueMessage;
+		try {
+			message = JSON.parse(batch.messages[0].body as string);
+		} catch (e) {
+			console.log('Invalid queue message format', e);
+			return;
+		}
+		console.log(message);
+
+
+		const { offset, type } = message;
+
+		const handlers = {
+			'tires': processTires,
+			'wheels': processWheels
+		};
+		const hasNextPage = await handlers[type](offset, FETCH_LIMIT, env);
+
+		if (hasNextPage === null) {
+			console.log('failed to save product');
+			return;
 		}
 
-		// console.log('hasNextPage', hasNextPage);
-
-		console.log(`Processed ${offset + items.length} items out of ${totalItems}`);		
-
 		if (hasNextPage) {
-			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(offset + FETCH_LIMIT);
+			// if (offset === 0) {
+			const message: TRawQueueMessage = {
+				offset: offset + FETCH_LIMIT,
+				type
+			};
+			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
 		} else {
-			console.log('END!!!');
+			if (type === 'tires') {
+				const message: TRawQueueMessage = {
+					offset: 0,
+					type: 'wheels'
+				};
+
+				await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+			} else {
+				console.log('No more pages to process');
+			}
 		}
 
 	}
 } satisfies ExportedHandler<Env>;
 
-// send message to the queue with 0 offset to start data processing
+// send message to the queue with 0 offset to start data processing tires first, wheels next
 async function startProcessing(env: Env): Promise<Response> {
-	await env.MODELS_AGGREGATION_FETCH_QUEUE.send(0);
+	const initialMessage = {
+		type: 'tires',
+		offset: 0
+	};
+	await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(initialMessage));
 	return getResponse('Started');
 }
 
@@ -130,31 +112,82 @@ async function initializeDatabase(env: Env): Promise<Response> {
 		const { results } = await env.MODELS_AGGREGATION_DB.prepare(initTablesStmt)
 			.all();
 		return getResponse('initialized ' + JSON.stringify(results));
-	} catch(e) {
+	} catch (e) {
 		console.log(e);
-		
-		return new Response('Unable to init database, ' + e)
+
+		return new Response('Unable to init database, ' + e);
 	}
+}
+
+async function updateDatabase(env: Env): Promise<Response> {
+	const lastUpdate = await env.PRODUCTS_AGGREGATION_KV.get(LAST_UPDATE_KV_KEY);
+
+	await env.MODELS_AGGREGATION_DB.prepare(`
+		DELETE FROM WheelProducts WHERE imageUrl = "test img"	
+	`)
+	.run()
+
+	return getResponse('updating ');
+
 }
 
 // show page with all brands, models and products from D1 database
 // TODO decide what to do with this page since there can be too many products to show at once
 async function previewData(env: Env): Promise<Response> {
+	const date = '2025-02-23T12:15:35.791Z';
+	console.log(date);
+	await env.PRODUCTS_AGGREGATION_KV.put('last-update', date);
+
+	console.log(await env.PRODUCTS_AGGREGATION_KV.get('last-update'));
+
 	let content = '';
 	try {
-		const [models, brands, products] = await Promise.all([
-			getAllEntriesFromDbByQuery('SELECT * FROM Models', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM Brands', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM Products', env),
-		]);	
-		content = `<hr/> 
-			${renderList('Brands', brands.results)}
-			<hr />
-			${renderList('Models', models.results)}
-			<hr/>
-			${renderList('Produtcs', products.results)}`;
-	} catch(e) {
-		content = '<h3>Initialize database first</h3>'
+		const [
+			tireModels,
+			tireBrands,
+			tireRebates,
+			tireProducts,
+			wheelModels,
+			wheelBrands,
+			wheelRebates,
+			wheelProducts
+		] = await Promise.all([
+			getAllEntriesFromDbByQuery('SELECT * FROM TireModels', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM TireBrands', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM TireRebates', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM TireProducts', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM WheelModels', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM WheelBrands', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM WheelRebates', env),
+			getAllEntriesFromDbByQuery('SELECT * FROM WheelProducts', env),
+		]);
+		content = `
+			<hr/> 
+			<div style="display: flex; gap: 10px; word-break: break-word">
+				<div style="flex: 0 0 50%">
+					<h2>Tires</h2>
+					${renderList('Brands', tireBrands.results)}
+					<hr />
+					${renderList('Models', tireModels.results)}
+					<hr/>
+					${renderList('Rebates', tireRebates.results)}
+					<hr/>
+					${renderList('Produtcs', tireProducts.results)}
+				</div>
+				<div style="flex: 0 0 50%">
+					<h2>Wheels</h2>
+					${renderList('Brands', wheelBrands.results)}
+					<hr />
+					${renderList('Models', wheelModels.results)}
+					<hr/>
+					${renderList('Rebates', wheelRebates.results)}
+					<hr/>
+					${renderList('Produtcs', wheelProducts.results)}
+				</div>
+			</div>
+		`;
+	} catch (e) {
+		content = '<h3>Initialize database first</h3>';
 	}
 
 	return getResponse(content);
@@ -179,295 +212,62 @@ function getResponse(content: string): Response {
 			<div>
 				<a href="/preview">PREVIEW PARSED DATA</a>
 			</div>
+			<div>
+				<a href="/update">UPDATE PARSED DATA</a>
+			</div>
 		</div>
 	`;
 
-	const fullContent = menu + `<div>` + content + '<div>';
+	const fullContent = menu + `<div>` + content + '</div>';
 
 	return new Response(fullContent, {
 		headers: {
 			'Content-Type': 'text/html'
 		}
-	})
+	});
 }
 
 // convert items list to the HTML string
 function renderList(title: string, items: Array<any>): string {
 	let str = '<div>';
-	str += `<h2>${title}</h2>`
-	str += `<div>Total ${items.length} items:</div>`
-	items.forEach((item, index) => {
-		str += `<strong>${index + 1}.</strong> ${JSON.stringify(item)}<br /><br />`
-	});
-	
-	str += '</div>';
-	
+	str += `<h2>${title}</h2>`;
+	str += `<details>`;
+	str += `<summary>Total ${items.length} items:</summary>`;
+	if (items.length < 1000) {
+		str += `<ol style="max-height: 80vh; overflow-y: auto;">`;
+		items.forEach((item, index) => {
+			str += `<li>${JSON.stringify(item)}<br /> <br /></li>`;
+		});
+		str += `</ol>`;
+	} else {
+		for (let i = 0; i < items.length; i += 1000) {
+			const max = Math.min(i + 1000, items.length);
+			str += `<div>`;
+			str += `<details style="padding-left: 10px;">`;
+			str += `<summary>Items ${i}-${max - 1}:</summary>`;
+			str += `<ol style="max-height: 80vh; overflow-y: auto; padding-left: 50px;" start="${i}"}>`;
+			items.slice(i, max).forEach((item) => {
+				str += `<li>${JSON.stringify(item)}<br /> <br /></li>`;
+			});
+			str += `</ol>`;
+			str += `</details>`;
+			str += `</div>`;
+
+		}
+	}
+	str += '</details></div>';
+
 	return str;
 }
 
-// fetch data from the API by given offset
-async function fetchItems(offset: number, env: Env): Promise<ProductsFetchData> {
-	type TAllTiresResponse = {
-		data: {
-			allTires: {
-				items: Product[], 
-				pageInfo: {
-					hasNextPage: boolean, 
-					totalCount: number
-				}
-			}
-		}
-	}
-	// TODO Now we use filter by model name to prevent all tires parsing. (Remove filter for real data mapping)
-	const requestData = JSON.stringify({
-		query: `query AllTires {
-			allTires(limit: ${FETCH_LIMIT}, offset: ${offset}, modelName: "AT") {
-				items {
-					availability
-					brand
-					currency
-					description
-					dualLoadIndex
-					dualMaxInflationPressure
-					dualMaxLoad
-					featured
-					id
-					imageUrl
-					loadIndex
-					maxInflationPressure
-					maxLoad
-					modelName
-					modelTaxonId
-					mpn
-					overallDiameter
-					price
-					revsPerMile
-					rimWidthRange
-					roadCondition
-					sectWidth
-					sidewall
-					sizeDesc
-					sku
-					speedRating
-					temperature
-					traction
-					treadDepth
-					treadType
-					treadwear
-					url
-					utqg
-					warranty
-					size {
-						aspectRatio
-						diameter
-						width
-					}
-				}
-				pageInfo {
-					hasNextPage
-					limit
-					offset
-					totalCount
-				}
-			}
-		}`
-	});
-
-	const response = await fetch(
-		'https://graphql.tireagent.com/api/graphql',
-		{
-			method: 'post',
-			body: requestData,
-			headers: {
-				'Content-Type': 'application/json',
-				'x-api-key': env.API_KEY,
-				'x-bot-bypass': env.BOT_BYPASS_KEY
-			}
-		}
-	);
-
-	const json: TAllTiresResponse = await response.json();
-	console.log(json);
-	
-	const {
-		items, 
-		pageInfo: {
-			hasNextPage, 
-			totalCount
-		}
-	} = json.data.allTires;
-
-	return {
-		items, 
-		hasNextPage,
-		totalItems: totalCount
-	};
-}
-
-// save item and corresponding brand and model to the D1 database
-async function processItem(product: Product, env: Env) {
-	// console.log('processing item', product.id);
-	
-	let brandId: number | null = await getBrandId(product.brand, env);
-
-	if (!brandId) {
-		// console.log('brand', product.brand, 'does not exist');
-		
-		brandId = await addBrand(product.brand, env);
-	}
-
-	if (brandId) {
-		let modelId: number | null = await getModelId(product.modelName, brandId, env);
-		if (!modelId) {
-			modelId = await addModel(product.modelName, brandId, product.modelTaxonId, env);
-		}
-
-		if (modelId) {
-			await addProduct(product, modelId, env);
-		}
-	}
-	
-}
-
-// find brand in the D1 database by name and return it's id. Return null if brand does not exist
-async function getBrandId(brandName: string, env: Env): Promise<number | null> {
-	const { results } = await env.MODELS_AGGREGATION_DB.prepare(
-			`SELECT * FROM Brands
-				WHERE brandName = ?`
-		)
-		.bind(brandName)
-		.all();
-	
-	return Number(results?.[0]?.brandId) || null;
-}
-
-// add new brand to the D1 database
-async function addBrand(brandName: string, env: Env): Promise<number | null> {
-	await env.MODELS_AGGREGATION_DB.prepare(`
-		INSERT INTO Brands (brandName)
-			VALUES (?);
-	`)
-		.bind(brandName)
-		.run();
-
-	const {results } = await env.MODELS_AGGREGATION_DB.prepare('SELECT last_insert_rowid();')
-		.run();
-
-	// console.log(`Brand ${brandName} added`);
-	
-
-	return Number(results[0]?.['last_insert_rowid()']) || null;
-}
-
-// find model in the D1 database by name and return it's id. Return null if model does not exist
-async function getModelId(modelName: string, brandId: number, env: Env): Promise<number | null> {
-	const { results } = await env.MODELS_AGGREGATION_DB.prepare(
-			`SELECT * FROM Models
-				WHERE modelName = ? AND brandId = ?`
-		)
-			.bind(modelName, brandId)
-			.all();
-	
-	return Number(results?.[0]?.modelId) || null;
-}
-
-// add new model to the D1 database
-async function addModel(modelName: string, brandId: number, modelTaxonId: string, env: Env): Promise<number | null> {
-	await env.MODELS_AGGREGATION_DB.prepare(`
-		INSERT INTO Models (modelName, brandId, modelTaxonId)
-			VALUES (?,?,?);
-	`)
-		.bind(modelName, brandId, modelTaxonId)
-		.run();
-
-	const {results } = await env.MODELS_AGGREGATION_DB.prepare('SELECT last_insert_rowid();')
-		.run();
-
-	// console.log(`Model ${modelName} added`);
-	
-
-	return Number(results[0]?.['last_insert_rowid()']) || null;
-}
-
-// add new product to the D1 database
-async function addProduct(productData: Product, modelId: number, env: Env) {
-	const result = await env.MODELS_AGGREGATION_DB.prepare(`
-		INSERT INTO Products (
-			availability,
-			currency,
-			description,
-			dualLoadIndex,
-			dualMaxInflationPressure,
-			dualMaxLoad,
-			featured,
-			id,
-			imageUrl,
-			loadIndex,
-			maxInflationPressure,
-			maxLoad,
-			mpn,
-			overallDiameter,
-			price,
-			revsPerMile,
-			rimWidthRange,
-			roadCondition,
-			sectWidth,
-			sidewall,
-			sizeDesc,
-			sku,
-			speedRating,
-			temperature,
-			traction,
-			treadDepth,
-			treadType,
-			treadwear,
-			url,
-			utqg,
-			warranty,
-			aspectRatio,
-			diameter,
-			width,
-			ModelId
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-	`)
-	.bind(
-		productData.availability,	
-		productData.currency,	
-		productData.description,	
-		productData.dualLoadIndex,	
-		productData.dualMaxInflationPressure,	
-		productData.dualMaxLoad,	
-		productData.featured,	
-		productData.id,	
-		productData.imageUrl,	
-		productData.loadIndex,	
-		productData.maxInflationPressure,	
-		productData.maxLoad,	
-		productData.mpn,	
-		productData.overallDiameter,	
-		productData.price,	
-		productData.revsPerMile,	
-		productData.rimWidthRange,	
-		productData.roadCondition,	
-		productData.sectWidth,	
-		productData.sidewall,	
-		productData.sizeDesc,	
-		productData.sku,	
-		productData.speedRating,	
-		productData.temperature,	
-		productData.traction,	
-		productData.treadDepth,	
-		productData.treadType,	
-		productData.treadwear,	
-		productData.url,	
-		productData.utqg,	
-		productData.warranty,	
-		productData.size.aspectRatio,	
-		productData.size.diameter,	
-		productData.size.width,	
-		modelId
-	)
-	.run();
-
-	// console.log('Product' + productData.id + ' added');
+async function exportDatabase(env: Env) {
+	const accountId = '5d68a406dc066c38394a6b8a1f6e3a90';
+	const databaseId = 'b717771c-4795-4261-b76c-39ea6136470c';
+	const D1_REST_API_TOKEN = '';
+	const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
+	const method = "POST";
+	const headers = new Headers();
+	headers.append("Content-Type", "application/json");
+	headers.append("Authorization", `Bearer ${D1_REST_API_TOKEN}`);
+	return getResponse('export');
 }
