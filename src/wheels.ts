@@ -1,4 +1,15 @@
-import { addBulkBrands, addBulkModels, addBulkRebates, fetchItemsFromAPI, recursiveSave, TModel, TRebate } from './common';
+import { 
+    addBulkBrands, 
+    addBulkModels, 
+    addBulkRebates, 
+    fetchItemsFromAPI, 
+    getCurrentTime, 
+    recursiveExecute, 
+    TModel, 
+    TRebate,
+    checkAndDeleteRebates,
+    bulkDeleteProductsById
+ } from './common';
 
 export type TWheelProduct = {
     availability: string;
@@ -32,12 +43,12 @@ type TWheelsFetchData = {
     totalItems: number;
 };
 
-export async function processWheels(offset: number, limit: number, env: Env): Promise<boolean> {
+export async function collectWheels(offset: number, limit: number, env: Env): Promise<boolean> {
     if (offset === 0) {
         await processWheelRebates(env)
     }
     
-    console.log('Processing wheels with offset ' + offset);
+    console.log(`${getCurrentTime()} Processing wheels with offset ${offset}`);
     const { items, hasNextPage, totalItems } = await fetchWheels(offset, limit, env);
     const brandNames = new Set<string>();
     const models: Record<string, TModel> = {};
@@ -52,21 +63,21 @@ export async function processWheels(offset: number, limit: number, env: Env): Pr
         };
     }
 
-    await recursiveSave(Array.from(brandNames), env, 'wheels', addBulkBrands);
-    await recursiveSave(Object.values(models), env, 'wheels', addBulkModels);
+    await recursiveExecute(Array.from(brandNames), env, 'wheels', addBulkBrands);
+    await recursiveExecute(Object.values(models), env, 'wheels', addBulkModels);
 
     for (let item of items) {
         await addWheelProduct(item, env);
     }
 
-    console.log(`Processed ${offset + items.length} wheels out of ${totalItems}`);
+    console.log(`${getCurrentTime()} Processed ${offset + items.length} wheels out of ${totalItems}`);
 
     return hasNextPage;
 }
 
 // fetch and save to the D1 DB all tire rebates
-export async function processWheelRebates(env: Env): Promise<void> {
-    console.log('Processing tire rebates');
+export async function processWheelRebates(env: Env, shouldCheckDeleted?: boolean): Promise<void> {
+    console.log(getCurrentTime(), 'Processing tire rebates');
     
     type TRebatesResponse = {
         data: {
@@ -99,21 +110,61 @@ export async function processWheelRebates(env: Env): Promise<void> {
         
         rebates = data.wheelDeals;
     } catch (e) {
-        console.log('Unable to fetch wheel rebates');
+        console.log(getCurrentTime(), 'Unable to fetch wheel rebates');
+    }
+
+    if (shouldCheckDeleted) {
+        await checkAndDeleteRebates(rebates, 'wheels', env)
     }
     
     if (!rebates?.length) {
         return;
     }
 
-    await recursiveSave(rebates, env, 'wheels', addBulkRebates);
+    await recursiveExecute(rebates, env, 'wheels', addBulkRebates);
 
-    console.log(`Saved ${rebates.length} wheel rebates`);
+    console.log(`${getCurrentTime()} Saved ${rebates.length} wheel rebates`);
     
 }
 
+// fetch and update in the D1 DB wheel product data due to given offset and lastUpdate date
+export async function updateWheels(offset: number, limit: number, env: Env, lastUpdateDate: string | null): Promise<boolean | null> {
+    console.log(`${getCurrentTime()} Updating wheels with offset ${offset} and updateDate ${lastUpdateDate}`);
+
+    if (!lastUpdateDate) {
+        return null;
+    }
+    if (offset === 0) {
+        await processWheelRebates(env, true);
+    }
+    
+    const {items, hasNextPage, totalItems}: TWheelsFetchData = await fetchWheels(offset, limit, env, 0, lastUpdateDate);
+
+    console.log(`${getCurrentTime()} Updated ${offset + items.length} wheels out of ${totalItems}, changed after ${lastUpdateDate}`);
+    
+    return hasNextPage;
+}
+
+export async function deleteWheels(offset: number, limit: number, env: Env, lastUpdateDate: string | null): Promise<boolean | null> {
+    console.log(`${getCurrentTime()} Deleting wheels with offset ${offset} and updateDate ${lastUpdateDate}`);
+
+    if (!lastUpdateDate) {
+        return null;
+    }
+
+    const { items, hasNextPage, totalItems }: TWheelsFetchData = await fetchWheels(offset, limit, env, 0, lastUpdateDate, true);
+
+    const deletedWheelIds = items.map(tire => tire.id);
+
+    await recursiveExecute(deletedWheelIds, env, 'wheels', bulkDeleteProductsById)
+
+    console.log(`${getCurrentTime()} Deleted ${offset + items.length} wheels out of ${totalItems}, changed after ${lastUpdateDate}`);
+
+    return hasNextPage;
+}
+
 // fetch data from the API by given offset
-export async function fetchWheels(offset: number, limit: number, env: Env, attemptNumber = 0): Promise<TWheelsFetchData> {
+export async function fetchWheels(offset: number, limit: number, env: Env, attemptNumber = 0, lastUpdatedDate?: string, deleted?: boolean): Promise<TWheelsFetchData> {
     type TAllWheelsResponse = {
         data: {
             allWheels: {
@@ -128,8 +179,18 @@ export async function fetchWheels(offset: number, limit: number, env: Env, attem
 
     const maxAttempts = 3;
 
+    let queryArguments = `limit: ${limit}, offset: ${offset}`;
+
+    if (lastUpdatedDate) {
+        queryArguments += `, updatedAfter: "${lastUpdatedDate}"`;
+    }
+
+    if (deleted) {
+        queryArguments += `, deleted: true`
+    }
+
     const query = `query AllWheels {
-        allWheels(limit: ${limit}, offset: ${offset}) {
+        allWheels(${queryArguments}) {
             items {
                 availability
                 backSpacing
@@ -186,11 +247,11 @@ export async function fetchWheels(offset: number, limit: number, env: Env, attem
             totalItems: totalCount
         };
     } catch (e) {
-        console.log(`Unable to fetch wheels with offset ${offset}`, e);
+        console.log(`${getCurrentTime()} Unable to fetch wheels with offset ${offset}`, e);
         console.log(query);
         if (attemptNumber < maxAttempts) {
             const newAttemptNumber = attemptNumber + 1;
-            console.log('Attempt' + newAttemptNumber);
+            console.log(getCurrentTime(), 'Attempt' + newAttemptNumber);
             
             return await fetchWheels(offset, limit, env, newAttemptNumber);
         }
@@ -259,7 +320,7 @@ async function addWheelProduct(productData: TWheelProduct, env: Env) {
             .bind(...values)
             .run();
     } catch (e) {
-        console.log('Unable to save product', productData);
+        console.log(getCurrentTime(), 'Unable to save product', productData);
         console.log(e);
         console.log(query);
 

@@ -1,4 +1,5 @@
-import { addBulkBrands, addBulkModels, addBulkRebates, fetchItemsFromAPI, getRebateById, recursiveSave, TModel, TRebate } from './common';
+import { addBulkBrands, addBulkModels, addBulkRebates, bulkDeleteProductsById, bulkDeleteRebatesById, checkAndDeleteRebates, fetchItemsFromAPI, getAllEntriesFromDbByQuery, getCurrentTime, recursiveExecute, TModel, TRebate } from './common';
+import { deleteTiresMock, initialTiresMock, updateTiresMock } from './mocks/tires';
 
 type TTireProduct = {
     availability: string;
@@ -40,7 +41,7 @@ type TTireProduct = {
         diameter: number;
         width: number;
     };
-    rebate: { id: number } | null;
+    rebate: { id: number; } | null;
 };
 
 type TTiresFetchData = {
@@ -51,15 +52,14 @@ type TTiresFetchData = {
 
 // fetch and process chunk of tires data due to given offset
 // returns true if more tires still available to fetch from API
-export async function processTires(offset: number, limit: number, env: Env): Promise<boolean | null> {
+export async function collectTires(offset: number, limit: number, env: Env): Promise<boolean | null> {
     if (offset === 0) {
-        await processTireRebates(env)
+        await processTireRebates(env);
     }
-
-    console.log('Processing tires with offset ' + offset);
-    
+    console.log(`${getCurrentTime()} Collecting tires with offset ${offset}`);
     const { items, hasNextPage, totalItems } = await fetchTires(offset, limit, env);
-
+    
+    
     const brandNames = new Set<string>();
     const models: Record<string, TModel> = {};
 
@@ -68,13 +68,13 @@ export async function processTires(offset: number, limit: number, env: Env): Pro
         models[item.modelName] = {
             modelName: item.modelName,
             brandName: item.brand,
-            // skop modelTaxonId property for tires since API fails to return single product with that specific property
+            // skip modelTaxonId property for tires since API fails to return some products with that specific property
             modelTaxonId: 'unset'
         };
     }
 
-    await recursiveSave(Array.from(brandNames), env, 'tires', addBulkBrands);
-    await recursiveSave(Object.values(models), env, 'tires', addBulkModels);
+    await recursiveExecute(Array.from(brandNames), env, 'tires', addBulkBrands);
+    await recursiveExecute(Object.values(models), env, 'tires', addBulkModels);
 
     for (let item of items) {
         const res = await addTireProduct(item, env);
@@ -83,20 +83,23 @@ export async function processTires(offset: number, limit: number, env: Env): Pro
         }
     }
 
-    console.log(`Processed ${offset + items.length} tires out of ${totalItems}`);
+    console.log(`${getCurrentTime()} Processed ${offset + items.length} tires out of ${totalItems}`);
 
     return hasNextPage;
 }
 
 // fetch and save to the D1 DB all tire rebates
-export async function processTireRebates(env: Env): Promise<void> {
-    console.log('Processing tire rebates');
-    
+export async function processTireRebates(env: Env, shouldCheckDeleted?: boolean): Promise<void> {
+    console.log(getCurrentTime(), 'Processing tire rebates');
+
     type TRebatesResponse = {
         data: {
-            tireDeals: TRebate[]
-        }
-    }
+            tireDeals: TRebate[];
+        };
+    };
+
+    let rebates: TRebate[] = [];
+
     const query = `
         query TireDeals {
             tireDeals {
@@ -116,32 +119,72 @@ export async function processTireRebates(env: Env): Promise<void> {
             }
         }
     `;
-
-    let rebates: TRebate[] = [];
     try {
         const { data }: TRebatesResponse = await fetchItemsFromAPI(query, env);
-        
+
         rebates = data.tireDeals;
     } catch (e) {
-        console.log('Unable to fetch tire rebates');
+        console.log(getCurrentTime(), 'Unable to fetch tire rebates');
     }
-    
+
+    if (shouldCheckDeleted) {
+        await checkAndDeleteRebates(rebates, 'tires', env)
+    }
+
     if (!rebates?.length) {
         return;
     }
 
-    await recursiveSave(rebates, env, 'tires', addBulkRebates);
+    await recursiveExecute(rebates, env, 'tires', addBulkRebates);
 
-    console.log(`Saved ${rebates.length} tire rebates`);
-    
+    console.log(`${getCurrentTime()} Saved ${rebates.length} tire rebates`);
+
 }
 
-export async function updateTires(env: Env, lastUpdateData: string): Promise<void> {
+// fetch and update in the D1 DB tire product data due to given offset and lastUpdate date
+export async function updateTires(offset: number, limit: number, env: Env, lastUpdateDate: string | null): Promise<boolean | null> {
+    console.log(`${getCurrentTime()} Updating tires with offset ${offset} and updateDate ${lastUpdateDate}`);
 
+    if (!lastUpdateDate) {
+        return null;
+    }
+    if (offset === 0) {
+        await processTireRebates(env, true);
+    }
+    
+    const { items, hasNextPage, totalItems }: TTiresFetchData = await fetchTires(offset, limit, env, 0, lastUpdateDate);
+    
+    for (let item of items) {
+        const res = await addTireProduct(item, env);
+        if (!res) {
+            return null;
+        }
+    }
+    console.log(`${getCurrentTime()} Updated ${offset + items.length} tires out of ${totalItems}, changed after ${lastUpdateDate}`);
+
+    return hasNextPage
+}
+
+export async function deleteTires(offset: number, limit: number, env: Env, lastUpdateDate: string | null): Promise<boolean | null> {
+    console.log(`${getCurrentTime()} Deleting tires with offset ${offset} and updateDate ${lastUpdateDate}`);
+
+    if (!lastUpdateDate) {
+        return null;
+    }
+
+    const { items, hasNextPage, totalItems }: TTiresFetchData = await fetchTires(offset, limit, env, 0, lastUpdateDate, true);
+    
+    const deletedTireIds = items.map(tire => tire.id);
+
+    await recursiveExecute(deletedTireIds, env, 'tires', bulkDeleteProductsById)
+
+    console.log(`${getCurrentTime()} Deleted ${offset + items.length} tires out of ${totalItems}, changed after ${lastUpdateDate}`);
+
+    return hasNextPage;
 }
 
 // fetch data from the API by given offset
-export async function fetchTires(offset: number, limit: number, env: Env, attemptNumber = 0): Promise<TTiresFetchData> {
+export async function fetchTires(offset: number, limit: number, env: Env, attemptNumber = 0, lastUpdatedDate?: string, deleted?: boolean): Promise<TTiresFetchData> {
     const maxAttempts = 3;
     type TTiresResponse = {
         data: {
@@ -154,9 +197,18 @@ export async function fetchTires(offset: number, limit: number, env: Env, attemp
             };
         };
     };
+    let queryArguments = `limit: ${limit}, offset: ${offset}`;
+
+    if (lastUpdatedDate) {
+        queryArguments += `, updatedAfter: "${lastUpdatedDate}"`;
+    }
+
+    if (deleted) {
+        queryArguments += `, deleted: true`
+    }
 
     const query = `query AllTires {
-        allTires(limit: ${limit}, offset: ${offset}) {
+        allTires(${queryArguments}) {
             items {
                 availability
                 brand
@@ -218,12 +270,12 @@ export async function fetchTires(offset: number, limit: number, env: Env, attemp
             totalItems: totalCount
         };
     } catch (e) {
-        console.log(`Unable to fetch tires with offset ${offset}`, e);
+        console.log(`${getCurrentTime()} Unable to fetch tires with offset ${offset}`, e);
         console.log(query);
         if (attemptNumber < maxAttempts) {
             const newAttemptNumber = attemptNumber + 1;
-            console.log('Attempt' + newAttemptNumber);
-            
+            console.log(`${getCurrentTime()} Attempt ${newAttemptNumber}`);
+
             return await fetchTires(offset, limit, env, newAttemptNumber);
         }
 
@@ -231,7 +283,7 @@ export async function fetchTires(offset: number, limit: number, env: Env, attemp
             items: [],
             hasNextPage: false,
             totalItems: 0
-        }
+        };
     }
 }
 
@@ -326,13 +378,11 @@ async function addTireProduct(productData: TTireProduct, env: Env): Promise<bool
             .run();
         return true;
     } catch (e) {
-        console.log('Unable to process item', productData);
+        console.log(`${getCurrentTime()} Unable to process item ${productData}`);
         console.log(e);
         console.log(query);
         console.log(values);
 
         return false;
     }
-
-    // console.log('Product' + productData.id + ' added');
 }

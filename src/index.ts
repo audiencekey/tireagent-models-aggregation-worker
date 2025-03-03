@@ -1,12 +1,13 @@
-import { LAST_UPDATE_KV_KEY, TProductType } from './common';
+import { getAllEntriesFromDbByQuery, getCurrentTime, LAST_UPDATE_KV_KEY, TActionType, TProductType } from './common';
 import { initTablesStmt } from './init';
-import { processTires } from './tires';
-import { processWheels } from './wheels';
+import { collectTires, deleteTires, updateTires } from './tires';
+import { collectWheels, deleteWheels, updateWheels } from './wheels';
 
 type TRawQueueMessage = {
 	type: TProductType;
+	action: TActionType;
 	offset: number;
-	lasUpdate?: string;
+	lastUpdate?: string;
 };
 
 const FETCH_LIMIT = 500;
@@ -14,16 +15,16 @@ const FETCH_LIMIT = 500;
 export default {
 
 	// show UI, execute functionality due to selected URL
-	async fetch(request, env): Promise<Response> {
+	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 		const pathname = url.pathname;
 		const handlersMap: Record<string, (env: Env) => Promise<Response>> = {
-			'/start': startProcessing,
+			'/start': startCollecting,
 			'/init': initializeDatabase,
-			'/update': updateDatabase,
+			'/update': startUpdating,
 			'/preview': previewData,
 			'/': showHomePage,
-			'/export': exportDatabase
+			// '/export': exportDatabase
 		};
 
 		const handler = handlersMap[pathname];
@@ -44,60 +45,166 @@ export default {
 		try {
 			message = JSON.parse(batch.messages[0].body as string);
 		} catch (e) {
-			console.log('Invalid queue message format', e);
+			console.log(getCurrentTime(), 'Invalid queue message format', e);
 			return;
 		}
-		console.log(message);
+		console.log(getCurrentTime(), message);
+		const { offset, type, action, lastUpdate } = message;
 
-
-		const { offset, type } = message;
-
-		const handlers = {
-			'tires': processTires,
-			'wheels': processWheels
-		};
-		const hasNextPage = await handlers[type](offset, FETCH_LIMIT, env);
-
-		if (hasNextPage === null) {
-			console.log('failed to save product');
-			return;
+		if (action === 'collect') {
+			return await handleCollectAction(type, offset, env);
+		}
+		if (action === 'update' && !!lastUpdate?.length) {
+			return await handleUpdateAction(type, offset, lastUpdate, env);
+		}
+		if (action === 'delete' && !!lastUpdate?.length) {
+			return await handleDeleteAction(type, offset, lastUpdate, env);
 		}
 
-		if (hasNextPage) {
-			// if (offset === 0) {
-			const message: TRawQueueMessage = {
-				offset: offset + FETCH_LIMIT,
-				type
-			};
-			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
-		} else {
-			if (type === 'tires') {
-				const message: TRawQueueMessage = {
-					offset: 0,
-					type: 'wheels'
-				};
-
-				await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
-			} else {
-				console.log('No more pages to process');
-			}
-		}
-
+		console.log(getCurrentTime(), 'Invalid update message. Action: ' + action + ', last update: ' + lastUpdate);
+		
+		return;
 	}
 } satisfies ExportedHandler<Env>;
 
+export async function handleCollectAction(type: TProductType, offset: number, env: Env): Promise<void> {
+	const handlers = {
+		'tires': collectTires,
+		'wheels': collectWheels
+	};
+	const hasNextPage = await handlers[type](offset, FETCH_LIMIT, env);
+
+	if (hasNextPage === null) {
+		console.log(getCurrentTime(), 'Failed to save product');
+		return;
+	}
+
+	if (hasNextPage) {
+		// if (offset === 0) {
+		const message: TRawQueueMessage = {
+			offset: offset + FETCH_LIMIT,
+			action: 'collect',
+			type
+		};
+		await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+	} else {
+		if (type === 'tires') {
+			const message: TRawQueueMessage = {
+				offset: 0,
+				action: 'collect',
+				type: 'wheels'
+			};
+
+			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+		} else {
+			console.log(getCurrentTime(), 'No more products to collect');
+		}
+	}
+}
+
+export async function handleUpdateAction(type: TProductType, offset: number, lastUpdate: string, env: Env): Promise<void> {
+	if (!lastUpdate?.length) {
+		console.log(getCurrentTime(), 'No lastUpdate date received, update process terminated');
+		
+		return;
+	}
+	const handlers = {
+		'tires': updateTires,
+		'wheels': updateWheels
+	};
+	const hasNextPage = await handlers[type](offset, FETCH_LIMIT, env, lastUpdate);
+
+	if (hasNextPage === null) {
+		console.log(getCurrentTime(), 'Failed to update products');
+		return;
+	}
+
+	if (hasNextPage) {
+		const message: TRawQueueMessage = {
+			offset: offset + FETCH_LIMIT,
+			action: 'update',
+			type,
+			lastUpdate
+		};
+		await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+	} else {
+		if (type === 'tires') {
+			const message: TRawQueueMessage = {
+				offset: 0,
+				action: 'update',
+				type: 'wheels',
+				lastUpdate
+			};
+
+			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+		} else {
+			const message: TRawQueueMessage = {
+				offset: 0,
+				action: 'delete',
+				type: 'tires',
+				lastUpdate
+			};
+
+			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+		}
+	}
+}
+
+export async function handleDeleteAction(type: TProductType, offset: number, lastUpdate: string, env: Env): Promise<void> {
+	if (!lastUpdate?.length) {
+		console.log(getCurrentTime(), 'No lastUpdate date received, delete process terminated');
+		
+		return;
+	}
+	const handlers = {
+		'tires': deleteTires,
+		'wheels': deleteWheels
+	};
+	const hasNextPage = await handlers[type](offset, FETCH_LIMIT, env, lastUpdate);
+
+	if (hasNextPage === null) {
+		console.log(getCurrentTime(), 'Failed to delete products');
+		return;
+	}
+
+	if (hasNextPage) {
+		const message: TRawQueueMessage = {
+			offset: offset + FETCH_LIMIT,
+			action: 'delete',
+			type,
+			lastUpdate
+		};
+		await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+	} else {
+		if (type === 'tires') {
+			const message: TRawQueueMessage = {
+				offset: 0,
+				action: 'delete',
+				type: 'wheels',
+				lastUpdate
+			};
+
+			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
+		} else {
+			console.log(getCurrentTime(), 'No more products to update');
+			env.PRODUCTS_AGGREGATION_KV.put(LAST_UPDATE_KV_KEY, new Date().toISOString());
+		}
+	}
+}
+
 // send message to the queue with 0 offset to start data processing tires first, wheels next
-async function startProcessing(env: Env): Promise<Response> {
-	const initialMessage = {
+export async function startCollecting(env: Env): Promise<Response> {
+	const initialMessage: TRawQueueMessage = {
 		type: 'tires',
+		action: 'collect',
 		offset: 0
 	};
 	await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(initialMessage));
-	return getResponse('Started');
+	return getResponse('Processing started');
 }
 
 // show static page with base info
-async function showHomePage(): Promise<Response> {
+export async function showHomePage(): Promise<Response> {
 	return Promise.resolve(getResponse(`
 		<h1>
 			Initialize DB before previewing or processing.<br/>
@@ -107,7 +214,7 @@ async function showHomePage(): Promise<Response> {
 }
 
 // (re)initialize database
-async function initializeDatabase(env: Env): Promise<Response> {
+export async function initializeDatabase(env: Env): Promise<Response> {
 	try {
 		const { results } = await env.MODELS_AGGREGATION_DB.prepare(initTablesStmt)
 			.all();
@@ -119,26 +226,62 @@ async function initializeDatabase(env: Env): Promise<Response> {
 	}
 }
 
-async function updateDatabase(env: Env): Promise<Response> {
+export async function startUpdating(env: Env): Promise<Response> {
+	// await env.PRODUCTS_AGGREGATION_KV.put(LAST_UPDATE_KV_KEY, '2023-03-06T16:04:38Z');
 	const lastUpdate = await env.PRODUCTS_AGGREGATION_KV.get(LAST_UPDATE_KV_KEY);
 
-	await env.MODELS_AGGREGATION_DB.prepare(`
-		DELETE FROM WheelProducts WHERE imageUrl = "test img"	
-	`)
-	.run()
-
-	return getResponse('updating ');
+	const initialMessage: TRawQueueMessage = {
+		type: 'tires',
+		action: 'update',
+		offset: 0,
+		lastUpdate: lastUpdate || ''
+	};
+	await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(initialMessage));
+	return getResponse('Updating started');
 
 }
 
 // show page with all brands, models and products from D1 database
 // TODO decide what to do with this page since there can be too many products to show at once
-async function previewData(env: Env): Promise<Response> {
-	const date = '2025-02-23T12:15:35.791Z';
-	console.log(date);
-	await env.PRODUCTS_AGGREGATION_KV.put('last-update', date);
+export async function previewData(env: Env): Promise<Response> {
+	// const date = '2025-02-23T12:15:35.791Z';
+	// console.log(date);
+	// await env.PRODUCTS_AGGREGATION_KV.put('last-update', date);
 
-	console.log(await env.PRODUCTS_AGGREGATION_KV.get('last-update'));
+	// console.log(await env.PRODUCTS_AGGREGATION_KV.get('last-update'));
+
+	// env.MODELS_AGGREGATION_DB.prepare(`INSERT OR REPLACE INTO wheelRebates (
+    //     brandId,
+    //     detailedDescription,
+    //     expiresAt,
+    //     id,
+    //     img,
+    //     instantRebate,
+    //     name,
+    //     price,
+    //     shortDescription,
+    //     startsAt,
+    //     submissionDate,
+    //     submissionLink,
+    //     title
+    // )
+    // VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);`)
+	// .bind(
+	// 	'1',
+    //     'Detailed Description',
+    //     '2025-02-23T12:15:35.791Z',
+    //     '123456',
+    //     'https://example.com/tire-rebate-img.jpg',
+    //     true,
+    //     'Tire Rebate 1',
+    //     10.99,
+    //     'Short Description',
+    //     '2025-02-23T12:15:35.791Z',
+    //     '2025-02-23T12:15:35.791Z',
+    //     'https://example.com/tire-rebate-submission.html',
+    //     'Tire Rebate 1 Title'
+	// )
+	// .run();
 
 	let content = '';
 	try {
@@ -193,21 +336,15 @@ async function previewData(env: Env): Promise<Response> {
 	return getResponse(content);
 }
 
-// get all entries from the D1 database by given query
-async function getAllEntriesFromDbByQuery(query: string, env: Env) {
-	return await env.MODELS_AGGREGATION_DB.prepare(query)
-		.all();
-}
-
 // generate basic page with given content
-function getResponse(content: string): Response {
+export function getResponse(content: string): Response {
 	const menu = `
 		<div style="display: flex; gap: 20px;">
 			<div>
 				<a href="/init">(RE)INITIALIZE DATABASE</a>
 			</div>
 			<div>
-				<a href="/start">START PROCESSING</a>
+				<a href="/start">START COLLECTING</a>
 			</div>
 			<div>
 				<a href="/preview">PREVIEW PARSED DATA</a>
@@ -228,7 +365,7 @@ function getResponse(content: string): Response {
 }
 
 // convert items list to the HTML string
-function renderList(title: string, items: Array<any>): string {
+export function renderList(title: string, items: Array<any>): string {
 	let str = '<div>';
 	str += `<h2>${title}</h2>`;
 	str += `<details>`;
@@ -258,16 +395,4 @@ function renderList(title: string, items: Array<any>): string {
 	str += '</details></div>';
 
 	return str;
-}
-
-async function exportDatabase(env: Env) {
-	const accountId = '5d68a406dc066c38394a6b8a1f6e3a90';
-	const databaseId = 'b717771c-4795-4261-b76c-39ea6136470c';
-	const D1_REST_API_TOKEN = '';
-	const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/export`;
-	const method = "POST";
-	const headers = new Headers();
-	headers.append("Content-Type", "application/json");
-	headers.append("Authorization", `Bearer ${D1_REST_API_TOKEN}`);
-	return getResponse('export');
 }
