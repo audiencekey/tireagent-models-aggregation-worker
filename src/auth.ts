@@ -24,6 +24,7 @@ export const FREE_ACCESS_ROUTES = [
 
 export const PROTECTEDR_ROUTES = [
     '/start',
+    '/stop',
     '/init',
     '/update',
     '/preview',

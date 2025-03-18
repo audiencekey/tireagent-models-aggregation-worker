@@ -27,7 +27,28 @@ export type TRawQueueMessage = {
 	action: TActionType;
 	offset: number;
 	lastUpdate?: string;
+    sessionId: number;
 };
+
+export type TSystemStatus = 'Collecting' | 'Updating' | 'Finished' | 'Stopped' | 'Failed' | 'Idle';
+
+export type TSystemState = {
+    lastSessionId: number;
+    tiresProcessed: number;
+    tiresTotal: number;
+    wheelsProcessed: number;
+    wheelsTotal: number;
+    status: TSystemStatus;
+}
+
+export const EMPTY_SYSTEM_STATE: TSystemState = {
+    lastSessionId: Date.now(),
+    tiresProcessed: 0,
+    tiresTotal: 0,
+    wheelsProcessed: 0,
+    wheelsTotal: 0,
+    status: 'Idle'
+}
 
 const MAX_ARGUMENTS_PER_QUERY = 32;
 export const LAST_UPDATE_KV_KEY = 'lastUpdate';
@@ -265,6 +286,9 @@ export async function getAllEntriesFromDbByQuery(query: string, env: Env) {
 export function getResponse(content: string): Response {
 	const menu = `
 		<div style="display: flex; gap: 20px; white-space: nowrap">
+            <div>
+				<a href="/">HOME</a>
+			</div>
 			<div>
 				<a href="/init">(RE)INITIALIZE DATABASE</a>
 			</div>
@@ -327,4 +351,21 @@ export function renderList(title: string, items: Array<any>): string {
 
 export function updateLastUpdatedDate(env: Env) {
 	env.PRODUCTS_AGGREGATION_KV.put(LAST_UPDATE_KV_KEY, new Date().toISOString());
+}
+
+export async function updateSystemState(newState: TSystemState, env: Env) {
+	await env.PRODUCTS_AGGREGATION_KV.put('systemState', JSON.stringify(newState));
+}
+
+export async function getSystemState(env: Env): Promise<TSystemState | null> {
+	const stateJSON = await env.PRODUCTS_AGGREGATION_KV.get('systemState');
+	try {
+		if (!stateJSON) {
+			throw Error('No state in the store');
+		}
+		return JSON.parse(stateJSON)
+	} catch (e) {
+		console.log('Unable to parse sytems state from the store', e);
+		return null;
+	}
 }
