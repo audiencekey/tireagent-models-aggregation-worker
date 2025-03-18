@@ -1,5 +1,15 @@
-import { addBulkBrands, addBulkModels, addBulkRebates, bulkDeleteProductsById, bulkDeleteRebatesById, checkAndDeleteRebates, fetchItemsFromAPI, getAllEntriesFromDbByQuery, getCurrentTime, recursiveExecute, TModel, TRebate } from './common';
-import { deleteTiresMock, initialTiresMock, updateTiresMock } from './mocks/tires';
+import { 
+    addBulkBrands, 
+    addBulkModels, 
+    addBulkRebates, 
+    bulkDeleteProductsById, 
+    checkAndDeleteRebates, 
+    fetchItemsFromAPI, 
+    getCurrentTime, 
+    recursiveExecute, 
+    TModel, 
+    TRebate 
+} from './common';
 
 type TTireProduct = {
     availability: string;
@@ -58,7 +68,6 @@ export async function collectTires(offset: number, limit: number, env: Env): Pro
     }
     console.log(`${getCurrentTime()} Collecting tires with offset ${offset}`);
     const { items, hasNextPage, totalItems } = await fetchTires(offset, limit, env);
-    
     
     const brandNames = new Set<string>();
     const models: Record<string, TModel> = {};

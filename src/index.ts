@@ -1,39 +1,96 @@
-import { getAllEntriesFromDbByQuery, getCurrentTime, LAST_UPDATE_KV_KEY, TActionType, TProductType } from './common';
+import { FREE_ACCESS_ROUTES, getNewSession, PROTECTEDR_ROUTES } from './auth';
+import { getCurrentTime, getResponse, TProductType, TRawQueueMessage, updateLastUpdatedDate } from './common';
+import { handleLogout, previewData, showHomePage, showLoginPage, showRegisterPage, startUpdating } from './get-handlers';
 import { initTablesStmt } from './init';
+import { handleLogin, handleRegister } from './post-handlers';
 import { collectTires, deleteTires, updateTires } from './tires';
 import { collectWheels, deleteWheels, updateWheels } from './wheels';
-
-type TRawQueueMessage = {
-	type: TProductType;
-	action: TActionType;
-	offset: number;
-	lastUpdate?: string;
-};
 
 const FETCH_LIMIT = 500;
 
 export default {
 
 	// show UI, execute functionality due to selected URL
-	async fetch(request, env, ctx): Promise<Response> {
+	async fetch(request: Request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
-		const pathname = url.pathname;
-		const handlersMap: Record<string, (env: Env) => Promise<Response>> = {
+		const {pathname} = url;
+		const isProtectedRoute = PROTECTEDR_ROUTES.includes(pathname);
+		const isFreeRoute = FREE_ACCESS_ROUTES.includes(pathname);
+
+		if (!isProtectedRoute && !isFreeRoute) {
+			return new Response('');
+		}
+
+		const newSession = await getNewSession(request, env);
+		
+		if (!newSession && isProtectedRoute) {
+			return new Response(null,
+				{
+					status: 301,
+					headers: {
+						'Location': '/login'
+					}
+				});
+		}
+
+		if (newSession && isFreeRoute) {
+			return new Response(null,
+				{
+					status: 301,
+					headers: {
+						'Location': '/',
+						'Set-Cookie': `session=${newSession}; secure; HttpOnly; SameSite=Strict`
+					}
+				});
+		}
+
+		const postHandlersMap: Record<string, (request: Request, env: Env) => Promise<Response>> = {
+			'/login': handleLogin,
+			'/register': handleRegister
+		}
+
+		const getHandlersMap: Record<string, (env: Env, extra?: Record<string, any>) => Promise<Response>> = {
 			'/start': startCollecting,
 			'/init': initializeDatabase,
 			'/update': startUpdating,
 			'/preview': previewData,
+			'/login': showLoginPage,
+			'/register': showRegisterPage,
+			'/logout': handleLogout,
 			'/': showHomePage,
 			// '/export': exportDatabase
 		};
+		
+		if (request.method === 'GET') {
+			const handler = getHandlersMap[pathname];
 
-		const handler = handlersMap[pathname];
+			if (!handler) {
+				return Response.redirect(url.origin);
+			}
 
-		if (!handler) {
-			return Response.redirect(url.origin);
+			const response = await handler(env, {params: url.searchParams, request});
+
+			if (isProtectedRoute && newSession) {
+				response.headers.set('Set-Cookie', `session=${newSession}; secure; HttpOnly; SameSite=Strict`)
+			}
+			
+			return response;
 		}
 
-		return await handler(env);
+		const postHandler = postHandlersMap[pathname];
+
+		if (!postHandler) {
+			return new Response('Invalid handler', {
+				status: 500
+			});
+		}
+
+		const response =  await postHandler(request, env);
+		// if (newSession) {
+		// 	response.headers.set('Set-Cookie', `session=${newSession}; secure; HttpOnly; SameSite=Strict`)
+		// }
+		return response;
+
 	},
 
 	/** 
@@ -97,6 +154,7 @@ export async function handleCollectAction(type: TProductType, offset: number, en
 
 			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
 		} else {
+			updateLastUpdatedDate(env);
 			console.log(getCurrentTime(), 'No more products to collect');
 		}
 	}
@@ -186,8 +244,8 @@ export async function handleDeleteAction(type: TProductType, offset: number, las
 
 			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
 		} else {
+			updateLastUpdatedDate(env);
 			console.log(getCurrentTime(), 'No more products to update');
-			env.PRODUCTS_AGGREGATION_KV.put(LAST_UPDATE_KV_KEY, new Date().toISOString());
 		}
 	}
 }
@@ -203,16 +261,6 @@ export async function startCollecting(env: Env): Promise<Response> {
 	return getResponse('Processing started');
 }
 
-// show static page with base info
-export async function showHomePage(): Promise<Response> {
-	return Promise.resolve(getResponse(`
-		<h1>
-			Initialize DB before previewing or processing.<br/>
-			WARNING!!! all existing data will be deleted pemanently!
-		</h1>
-	`));
-}
-
 // (re)initialize database
 export async function initializeDatabase(env: Env): Promise<Response> {
 	try {
@@ -224,175 +272,4 @@ export async function initializeDatabase(env: Env): Promise<Response> {
 
 		return new Response('Unable to init database, ' + e);
 	}
-}
-
-export async function startUpdating(env: Env): Promise<Response> {
-	// await env.PRODUCTS_AGGREGATION_KV.put(LAST_UPDATE_KV_KEY, '2023-03-06T16:04:38Z');
-	const lastUpdate = await env.PRODUCTS_AGGREGATION_KV.get(LAST_UPDATE_KV_KEY);
-
-	const initialMessage: TRawQueueMessage = {
-		type: 'tires',
-		action: 'update',
-		offset: 0,
-		lastUpdate: lastUpdate || ''
-	};
-	await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(initialMessage));
-	return getResponse('Updating started');
-
-}
-
-// show page with all brands, models and products from D1 database
-// TODO decide what to do with this page since there can be too many products to show at once
-export async function previewData(env: Env): Promise<Response> {
-	// const date = '2025-02-23T12:15:35.791Z';
-	// console.log(date);
-	// await env.PRODUCTS_AGGREGATION_KV.put('last-update', date);
-
-	// console.log(await env.PRODUCTS_AGGREGATION_KV.get('last-update'));
-
-	// env.MODELS_AGGREGATION_DB.prepare(`INSERT OR REPLACE INTO wheelRebates (
-    //     brandId,
-    //     detailedDescription,
-    //     expiresAt,
-    //     id,
-    //     img,
-    //     instantRebate,
-    //     name,
-    //     price,
-    //     shortDescription,
-    //     startsAt,
-    //     submissionDate,
-    //     submissionLink,
-    //     title
-    // )
-    // VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?);`)
-	// .bind(
-	// 	'1',
-    //     'Detailed Description',
-    //     '2025-02-23T12:15:35.791Z',
-    //     '123456',
-    //     'https://example.com/tire-rebate-img.jpg',
-    //     true,
-    //     'Tire Rebate 1',
-    //     10.99,
-    //     'Short Description',
-    //     '2025-02-23T12:15:35.791Z',
-    //     '2025-02-23T12:15:35.791Z',
-    //     'https://example.com/tire-rebate-submission.html',
-    //     'Tire Rebate 1 Title'
-	// )
-	// .run();
-
-	let content = '';
-	try {
-		const [
-			tireModels,
-			tireBrands,
-			tireRebates,
-			tireProducts,
-			wheelModels,
-			wheelBrands,
-			wheelRebates,
-			wheelProducts
-		] = await Promise.all([
-			getAllEntriesFromDbByQuery('SELECT * FROM TireModels', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM TireBrands', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM TireRebates', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM TireProducts', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM WheelModels', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM WheelBrands', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM WheelRebates', env),
-			getAllEntriesFromDbByQuery('SELECT * FROM WheelProducts', env),
-		]);
-		content = `
-			<hr/> 
-			<div style="display: flex; gap: 10px; word-break: break-word">
-				<div style="flex: 0 0 50%">
-					<h2>Tires</h2>
-					${renderList('Brands', tireBrands.results)}
-					<hr />
-					${renderList('Models', tireModels.results)}
-					<hr/>
-					${renderList('Rebates', tireRebates.results)}
-					<hr/>
-					${renderList('Produtcs', tireProducts.results)}
-				</div>
-				<div style="flex: 0 0 50%">
-					<h2>Wheels</h2>
-					${renderList('Brands', wheelBrands.results)}
-					<hr />
-					${renderList('Models', wheelModels.results)}
-					<hr/>
-					${renderList('Rebates', wheelRebates.results)}
-					<hr/>
-					${renderList('Produtcs', wheelProducts.results)}
-				</div>
-			</div>
-		`;
-	} catch (e) {
-		content = '<h3>Initialize database first</h3>';
-	}
-
-	return getResponse(content);
-}
-
-// generate basic page with given content
-export function getResponse(content: string): Response {
-	const menu = `
-		<div style="display: flex; gap: 20px;">
-			<div>
-				<a href="/init">(RE)INITIALIZE DATABASE</a>
-			</div>
-			<div>
-				<a href="/start">START COLLECTING</a>
-			</div>
-			<div>
-				<a href="/preview">PREVIEW PARSED DATA</a>
-			</div>
-			<div>
-				<a href="/update">UPDATE PARSED DATA</a>
-			</div>
-		</div>
-	`;
-
-	const fullContent = menu + `<div>` + content + '</div>';
-
-	return new Response(fullContent, {
-		headers: {
-			'Content-Type': 'text/html'
-		}
-	});
-}
-
-// convert items list to the HTML string
-export function renderList(title: string, items: Array<any>): string {
-	let str = '<div>';
-	str += `<h2>${title}</h2>`;
-	str += `<details>`;
-	str += `<summary>Total ${items.length} items:</summary>`;
-	if (items.length < 1000) {
-		str += `<ol style="max-height: 80vh; overflow-y: auto;">`;
-		items.forEach((item, index) => {
-			str += `<li>${JSON.stringify(item)}<br /> <br /></li>`;
-		});
-		str += `</ol>`;
-	} else {
-		for (let i = 0; i < items.length; i += 1000) {
-			const max = Math.min(i + 1000, items.length);
-			str += `<div>`;
-			str += `<details style="padding-left: 10px;">`;
-			str += `<summary>Items ${i}-${max - 1}:</summary>`;
-			str += `<ol style="max-height: 80vh; overflow-y: auto; padding-left: 50px;" start="${i}"}>`;
-			items.slice(i, max).forEach((item) => {
-				str += `<li>${JSON.stringify(item)}<br /> <br /></li>`;
-			});
-			str += `</ol>`;
-			str += `</details>`;
-			str += `</div>`;
-
-		}
-	}
-	str += '</details></div>';
-
-	return str;
 }

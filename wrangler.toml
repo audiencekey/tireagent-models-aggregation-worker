@@ -2,7 +2,7 @@
 name = "models-aggregation-worker"
 main = "src/index.ts"
 compatibility_date = "2024-12-05"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = ["nodejs_compat_v2"]
 
 # Workers Logs
 # Docs: https://developers.cloudflare.com/workers/observability/logs/workers-logs/
@@ -24,8 +24,12 @@ enabled = true
 # - https://developers.cloudflare.com/workers/configuration/secrets/
 [vars]
 # MY_VARIABLE = "production_value"
-API_KEY = "d28d69a2c198b40214da950e1e71735e"
+# API_KEY = "d28d69a2c198b40214da950e1e71735e"
+API_KEY = "b798bc72354a6d7256496c852508f054"
 BOT_BYPASS_KEY = "3dedee46815eff572aa1a1c1d3cb79be"
+SECRET = "sadfopiuq345opjlk;samf"
+ENCRYPTION_IV = "zPd31LEhOB4nTb+3"
+ENCRYPTION_KEY = "UlE6ywMb5EVTTw1L0W2e4UpuLX6cC2a9lZX5eOgZsXA="
 
 # Bind the Workers AI model catalog. Run machine learning models, powered by serverless GPUs, on Cloudflare’s global network
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#workers-ai

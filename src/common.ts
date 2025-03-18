@@ -22,6 +22,13 @@ export type TRebate = {
     title: string;
 };
 
+export type TRawQueueMessage = {
+	type: TProductType;
+	action: TActionType;
+	offset: number;
+	lastUpdate?: string;
+};
+
 const MAX_ARGUMENTS_PER_QUERY = 32;
 export const LAST_UPDATE_KV_KEY = 'lastUpdate';
 
@@ -108,7 +115,8 @@ export async function fetchItemsFromAPI<T>(query: string, env: Env): Promise<T> 
     });
 
     const response = await fetch(
-        'http://tireagent-graphql-sandbox.ugjpwrwwth.us-east-1.elasticbeanstalk.com/api/graphql',
+        // 'http://tireagent-graphql-sandbox.ugjpwrwwth.us-east-1.elasticbeanstalk.com/api/graphql',
+        'https://graphql.tireagent.com/api/graphql',
         {
             method: 'post',
             body: requestData,
@@ -251,4 +259,72 @@ export function getCurrentTime(): string {
 export async function getAllEntriesFromDbByQuery(query: string, env: Env) {
     return await env.MODELS_AGGREGATION_DB.prepare(query)
         .all();
+}
+
+// generate basic page with given content
+export function getResponse(content: string): Response {
+	const menu = `
+		<div style="display: flex; gap: 20px; white-space: nowrap">
+			<div>
+				<a href="/init">(RE)INITIALIZE DATABASE</a>
+			</div>
+			<div>
+				<a href="/start">START COLLECTING</a>
+			</div>
+			<div>
+				<a href="/preview">PREVIEW PARSED DATA</a>
+			</div>
+			<div>
+				<a href="/update">UPDATE PARSED DATA</a>
+			</div>
+            <div style="flex: 1 1 100%; text-align: right">
+                <a href="/logout">Logout</a>
+            </div>
+		</div>
+	`;
+
+	const fullContent = menu + `<div>` + content + '</div>';
+
+	return new Response(fullContent, {
+		headers: {
+			'Content-Type': 'text/html'
+		}
+	});
+}
+
+// convert items list to the HTML string
+export function renderList(title: string, items: Array<any>): string {
+	let str = '<div>';
+	str += `<h2>${title}</h2>`;
+	str += `<details>`;
+	str += `<summary>Total ${items.length} items:</summary>`;
+	if (items.length < 1000) {
+		str += `<ol style="max-height: 80vh; overflow-y: auto;">`;
+		items.forEach((item, index) => {
+			str += `<li>${JSON.stringify(item)}<br /> <br /></li>`;
+		});
+		str += `</ol>`;
+	} else {
+		for (let i = 0; i < items.length; i += 1000) {
+			const max = Math.min(i + 1000, items.length);
+			str += `<div>`;
+			str += `<details style="padding-left: 10px;">`;
+			str += `<summary>Items ${i}-${max - 1}:</summary>`;
+			str += `<ol style="max-height: 80vh; overflow-y: auto; padding-left: 50px;" start="${i}"}>`;
+			items.slice(i, max).forEach((item) => {
+				str += `<li>${JSON.stringify(item)}<br /> <br /></li>`;
+			});
+			str += `</ol>`;
+			str += `</details>`;
+			str += `</div>`;
+
+		}
+	}
+	str += '</details></div>';
+
+	return str;
+}
+
+export function updateLastUpdatedDate(env: Env) {
+	env.PRODUCTS_AGGREGATION_KV.put(LAST_UPDATE_KV_KEY, new Date().toISOString());
 }

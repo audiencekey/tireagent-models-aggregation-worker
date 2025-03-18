@@ -6,4 +6,6 @@ interface Env {
     PRODUCTS_AGGREGATION_KV: KVNamespace;
     API_KEY: string;
     BOT_BYPASS_KEY: string;
+    ENCRYPTION_IV: string;
+    ENCRYPTION_KEY: string;
 }

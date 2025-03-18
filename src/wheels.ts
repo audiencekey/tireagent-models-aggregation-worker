@@ -1,15 +1,15 @@
-import { 
-    addBulkBrands, 
-    addBulkModels, 
-    addBulkRebates, 
-    fetchItemsFromAPI, 
-    getCurrentTime, 
-    recursiveExecute, 
-    TModel, 
+import {
+    addBulkBrands,
+    addBulkModels,
+    addBulkRebates,
+    fetchItemsFromAPI,
+    getCurrentTime,
+    recursiveExecute,
+    TModel,
     TRebate,
     checkAndDeleteRebates,
     bulkDeleteProductsById
- } from './common';
+} from './common';
 
 export type TWheelProduct = {
     availability: string;
@@ -34,7 +34,7 @@ export type TWheelProduct = {
         diameter: number;
         width: number;
     };
-    rebate: { id: number } | null;
+    rebate: { id: number; } | null;
 };
 
 type TWheelsFetchData = {
@@ -45,11 +45,12 @@ type TWheelsFetchData = {
 
 export async function collectWheels(offset: number, limit: number, env: Env): Promise<boolean> {
     if (offset === 0) {
-        await processWheelRebates(env)
+        await processWheelRebates(env);
     }
-    
-    console.log(`${getCurrentTime()} Processing wheels with offset ${offset}`);
+
+    console.log(`${getCurrentTime()} Collecting wheels with offset ${offset}`);
     const { items, hasNextPage, totalItems } = await fetchWheels(offset, limit, env);
+
     const brandNames = new Set<string>();
     const models: Record<string, TModel> = {};
 
@@ -75,15 +76,15 @@ export async function collectWheels(offset: number, limit: number, env: Env): Pr
     return hasNextPage;
 }
 
-// fetch and save to the D1 DB all tire rebates
+// fetch and save to the D1 DB all wheel rebates
 export async function processWheelRebates(env: Env, shouldCheckDeleted?: boolean): Promise<void> {
-    console.log(getCurrentTime(), 'Processing tire rebates');
-    
+    console.log(getCurrentTime(), 'Processing wheel rebates');
+
     type TRebatesResponse = {
         data: {
-            wheelDeals: TRebate[]
-        }
-    }
+            wheelDeals: TRebate[];
+        };
+    };
     const query = `
         query WheelDeals {
             wheelDeals {
@@ -107,16 +108,16 @@ export async function processWheelRebates(env: Env, shouldCheckDeleted?: boolean
     let rebates: TRebate[] = [];
     try {
         const { data }: TRebatesResponse = await fetchItemsFromAPI(query, env);
-        
+
         rebates = data.wheelDeals;
     } catch (e) {
         console.log(getCurrentTime(), 'Unable to fetch wheel rebates');
     }
 
     if (shouldCheckDeleted) {
-        await checkAndDeleteRebates(rebates, 'wheels', env)
+        await checkAndDeleteRebates(rebates, 'wheels', env);
     }
-    
+
     if (!rebates?.length) {
         return;
     }
@@ -124,7 +125,7 @@ export async function processWheelRebates(env: Env, shouldCheckDeleted?: boolean
     await recursiveExecute(rebates, env, 'wheels', addBulkRebates);
 
     console.log(`${getCurrentTime()} Saved ${rebates.length} wheel rebates`);
-    
+
 }
 
 // fetch and update in the D1 DB wheel product data due to given offset and lastUpdate date
@@ -137,11 +138,18 @@ export async function updateWheels(offset: number, limit: number, env: Env, last
     if (offset === 0) {
         await processWheelRebates(env, true);
     }
-    
-    const {items, hasNextPage, totalItems}: TWheelsFetchData = await fetchWheels(offset, limit, env, 0, lastUpdateDate);
+
+    const { items, hasNextPage, totalItems }: TWheelsFetchData = await fetchWheels(offset, limit, env, 0, lastUpdateDate);
+
+    for (let item of items) {
+        const res = await addWheelProduct(item, env);
+        if (!res) {
+            return null;
+        }
+    }
 
     console.log(`${getCurrentTime()} Updated ${offset + items.length} wheels out of ${totalItems}, changed after ${lastUpdateDate}`);
-    
+
     return hasNextPage;
 }
 
@@ -154,9 +162,9 @@ export async function deleteWheels(offset: number, limit: number, env: Env, last
 
     const { items, hasNextPage, totalItems }: TWheelsFetchData = await fetchWheels(offset, limit, env, 0, lastUpdateDate, true);
 
-    const deletedWheelIds = items.map(tire => tire.id);
+    const deletedWheelIds = items.map(wheel => wheel.id);
 
-    await recursiveExecute(deletedWheelIds, env, 'wheels', bulkDeleteProductsById)
+    await recursiveExecute(deletedWheelIds, env, 'wheels', bulkDeleteProductsById);
 
     console.log(`${getCurrentTime()} Deleted ${offset + items.length} wheels out of ${totalItems}, changed after ${lastUpdateDate}`);
 
@@ -186,7 +194,7 @@ export async function fetchWheels(offset: number, limit: number, env: Env, attem
     }
 
     if (deleted) {
-        queryArguments += `, deleted: true`
+        queryArguments += `, deleted: true`;
     }
 
     const query = `query AllWheels {
@@ -252,7 +260,7 @@ export async function fetchWheels(offset: number, limit: number, env: Env, attem
         if (attemptNumber < maxAttempts) {
             const newAttemptNumber = attemptNumber + 1;
             console.log(getCurrentTime(), 'Attempt' + newAttemptNumber);
-            
+
             return await fetchWheels(offset, limit, env, newAttemptNumber);
         }
 
@@ -260,7 +268,7 @@ export async function fetchWheels(offset: number, limit: number, env: Env, attem
             items: [],
             hasNextPage: false,
             totalItems: 0
-        }
+        };
     }
 }
 
@@ -319,11 +327,14 @@ async function addWheelProduct(productData: TWheelProduct, env: Env) {
         await env.MODELS_AGGREGATION_DB.prepare(query)
             .bind(...values)
             .run();
+
+        return true;
     } catch (e) {
         console.log(getCurrentTime(), 'Unable to save product', productData);
         console.log(e);
         console.log(query);
 
+        return false;
     }
 
     // console.log('Product' + productData.id + ' added');
