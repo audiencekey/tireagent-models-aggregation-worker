@@ -77,7 +77,6 @@ export async function login(name: string, password: string, env: Env): Promise<s
 
     try {
         await updateUserData(sanitizedName, { ...userData, session }, env);
-        console.log('saved');
 
         return session;
     } catch (e) {
