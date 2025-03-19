@@ -109,19 +109,20 @@ export async function addBulkModels(modelsData: TModel[], env: Env, type: TProdu
         ];
     }
 }
-
+// Since D1 query allows only 32 arguments per query, big data sets should be split to chunks with valid amount of attributes
 export async function recursiveExecute<T>(items: T[], env: Env, type: TProductType, handler: Function, maxItems?: number): Promise<void> {
     if (!items.length) {
         return;
     }
+    
     const maxItemsPerQuery = maxItems || getMaxItemsPerQuery<T>(items[0]);
-    let currentItems = items.slice(0, maxItemsPerQuery);
-    let restItems = items.slice(maxItemsPerQuery);
-
-    await handler(currentItems, env, type);
-
-    if (restItems.length) {
-        await recursiveExecute(restItems, env, type, handler, maxItemsPerQuery);
+    let totalChunks = Math.ceil(items.length / maxItemsPerQuery);
+    let currentChunkNumber = 0;
+    
+    while(currentChunkNumber <= totalChunks - 1) {
+        let currentItems = items.slice(currentChunkNumber * maxItemsPerQuery, (currentChunkNumber + 1) * maxItemsPerQuery);
+        await handler(currentItems, env, type);
+        ++currentChunkNumber;
     }
 }
 
@@ -368,4 +369,11 @@ export async function getSystemState(env: Env): Promise<TSystemState | null> {
 		console.log('Unable to parse sytems state from the store', e);
 		return null;
 	}
+}
+
+export async function asyncDelay(timeMs: number = 1000): Promise<void> {
+    if (timeMs < 0) {
+        throw Error('Invalid delay time!');
+    }
+    return new Promise(res => setTimeout(() => res(), timeMs));
 }

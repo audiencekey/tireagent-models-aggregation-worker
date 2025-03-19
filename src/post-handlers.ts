@@ -23,7 +23,6 @@ export async function handleLogin(request: Request, env: Env) {
         if (!session) {
             return showLoginPage(env, {errors: ['Server error. Try again later']})
         }
-        console.log('Logging in with session ' + session);
         
         return new Response(null, {
             status: 301,

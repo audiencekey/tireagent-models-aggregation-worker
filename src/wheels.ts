@@ -8,7 +8,8 @@ import {
     TModel,
     TRebate,
     checkAndDeleteRebates,
-    bulkDeleteProductsById
+    bulkDeleteProductsById,
+    asyncDelay
 } from './common';
 
 export type TWheelProduct = {
@@ -63,15 +64,18 @@ export async function collectWheels(offset: number, limit: number, env: Env): Pr
             modelTaxonId: 'none'
         };
     }
-
+    
+    // Need delay between different entities save due to D1 save lag.
     await recursiveExecute(Array.from(brandNames), env, 'wheels', addBulkBrands);
+    await asyncDelay(1000);
     await recursiveExecute(Object.values(models), env, 'wheels', addBulkModels);
+    await asyncDelay(1000);
 
     for (let item of items) {
         await addWheelProduct(item, env);
     }
 
-    console.log(`${getCurrentTime()} Processed ${offset + items.length} wheels out of ${totalItems}`);
+    console.log(`${getCurrentTime()} Collected ${offset + items.length} wheels out of ${totalItems}`);
 
     return hasNextPage;
 }

@@ -1,5 +1,5 @@
 import { FREE_ACCESS_ROUTES, getNewSession, PROTECTEDR_ROUTES } from './auth';
-import { getCurrentTime, getResponse, getSystemState, TProductType, TRawQueueMessage, TSystemState, TSystemStatus, updateLastUpdatedDate } from './common';
+import { EMPTY_SYSTEM_STATE, getCurrentTime, getResponse, getSystemState, TProductType, TRawQueueMessage, TSystemState, TSystemStatus, updateLastUpdatedDate, updateSystemState } from './common';
 import { handleLogout, initializeDatabase, previewData, showHomePage, showLoginPage, showRegisterPage, startCollecting, startUpdating, stopProcessing } from './get-handlers';
 import { initTablesStmt } from './init';
 import { handleLogin, handleRegister } from './post-handlers';
@@ -114,10 +114,15 @@ export default {
 		if (currentState) {
 			const {status, lastSessionId} = currentState;
 		
-			if (status === 'Stopped' || lastSessionId !== sessionId) {
+			if (lastSessionId !== sessionId) {
 				console.log(getCurrentTime(), 'Attempt to run concurrent process');
 			
 				return;
+			}
+
+			if (status === 'Stopped') {
+				console.log(getCurrentTime(), 'Received Stop sygnal; process terminated');
+				return; 
 			}
 		}
 
@@ -132,6 +137,7 @@ export default {
 		}
 
 		console.log(getCurrentTime(), 'Invalid update message. Action: ' + action + ', last update: ' + lastUpdate);
+
 		
 		return;
 	}
@@ -146,6 +152,9 @@ export async function handleCollectAction(type: TProductType, offset: number, en
 
 	if (hasNextPage === null) {
 		console.log(getCurrentTime(), 'Failed to save product');
+		const currentState: TSystemState = (await getSystemState(env)) || EMPTY_SYSTEM_STATE;
+		const newState: TSystemState = {...currentState, status: 'Failed'};
+		await updateSystemState(newState, env);
 		return;
 	}
 
@@ -171,6 +180,9 @@ export async function handleCollectAction(type: TProductType, offset: number, en
 		} else {
 			updateLastUpdatedDate(env);
 			console.log(getCurrentTime(), 'No more products to collect');
+			const currentState: TSystemState = (await getSystemState(env)) || EMPTY_SYSTEM_STATE;
+			const newState: TSystemState = {...currentState, status: 'Finished'};
+			await updateSystemState(newState, env);
 		}
 	}
 }

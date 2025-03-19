@@ -2,6 +2,7 @@ import {
     addBulkBrands, 
     addBulkModels, 
     addBulkRebates, 
+    asyncDelay, 
     bulkDeleteProductsById, 
     checkAndDeleteRebates, 
     fetchItemsFromAPI, 
@@ -81,10 +82,11 @@ export async function collectTires(offset: number, limit: number, env: Env): Pro
             modelTaxonId: 'unset'
         };
     }
-
+    // Need delay between different entities save due to D1 save lag.
     await recursiveExecute(Array.from(brandNames), env, 'tires', addBulkBrands);
+    await asyncDelay(1000);
     await recursiveExecute(Object.values(models), env, 'tires', addBulkModels);
-
+    await asyncDelay(1000);
     for (let item of items) {
         const res = await addTireProduct(item, env);
         if (!res) {
@@ -92,7 +94,7 @@ export async function collectTires(offset: number, limit: number, env: Env): Pro
         }
     }
 
-    console.log(`${getCurrentTime()} Processed ${offset + items.length} tires out of ${totalItems}`);
+    console.log(`${getCurrentTime()} Collected ${offset + items.length} tires out of ${totalItems}`);
 
     return hasNextPage;
 }
@@ -387,7 +389,7 @@ async function addTireProduct(productData: TTireProduct, env: Env): Promise<bool
             .run();
         return true;
     } catch (e) {
-        console.log(`${getCurrentTime()} Unable to process item ${productData}`);
+        console.log(`${getCurrentTime()} Unable to process item ${JSON.stringify(productData)}`);
         console.log(e);
         console.log(query);
         console.log(values);
