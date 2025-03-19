@@ -30,7 +30,7 @@ export type TRawQueueMessage = {
     sessionId: number;
 };
 
-export type TSystemStatus = 'Collecting' | 'Updating' | 'Finished' | 'Stopped' | 'Failed' | 'Idle';
+export type TSystemStatus = 'Collecting' | 'Updating' | 'Finished' | 'Stopping' | 'Stopped' | 'Failed' | 'Idle';
 
 export type TSystemState = {
     lastSessionId: number;
@@ -118,7 +118,7 @@ export async function recursiveExecute<T>(items: T[], env: Env, type: TProductTy
     const maxItemsPerQuery = maxItems || getMaxItemsPerQuery<T>(items[0]);
     let totalChunks = Math.ceil(items.length / maxItemsPerQuery);
     let currentChunkNumber = 0;
-    
+
     while(currentChunkNumber <= totalChunks - 1) {
         let currentItems = items.slice(currentChunkNumber * maxItemsPerQuery, (currentChunkNumber + 1) * maxItemsPerQuery);
         await handler(currentItems, env, type);

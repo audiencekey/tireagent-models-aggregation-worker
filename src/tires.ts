@@ -5,11 +5,15 @@ import {
     asyncDelay, 
     bulkDeleteProductsById, 
     checkAndDeleteRebates, 
+    EMPTY_SYSTEM_STATE, 
     fetchItemsFromAPI, 
     getCurrentTime, 
+    getSystemState, 
     recursiveExecute, 
     TModel, 
-    TRebate 
+    TRebate, 
+    TSystemState,
+    updateSystemState
 } from './common';
 
 type TTireProduct = {
@@ -96,6 +100,16 @@ export async function collectTires(offset: number, limit: number, env: Env): Pro
 
     console.log(`${getCurrentTime()} Collected ${offset + items.length} tires out of ${totalItems}`);
 
+    const currentState: TSystemState = (await getSystemState(env) || EMPTY_SYSTEM_STATE);
+    const newState: TSystemState = {
+        ...currentState,
+        status: currentState.status === 'Stopped' ? 'Stopped' : 'Collecting',
+        tiresProcessed: offset + items.length,
+        tiresTotal: totalItems
+    }
+
+    await updateSystemState(newState, env);
+
     return hasNextPage;
 }
 
@@ -172,6 +186,15 @@ export async function updateTires(offset: number, limit: number, env: Env, lastU
         }
     }
     console.log(`${getCurrentTime()} Updated ${offset + items.length} tires out of ${totalItems}, changed after ${lastUpdateDate}`);
+    const currentState: TSystemState = (await getSystemState(env) || EMPTY_SYSTEM_STATE);
+    const newState: TSystemState = {
+        ...currentState,
+        status: currentState.status === 'Stopped' ? 'Stopped' : 'Updating',
+        tiresProcessed: offset + items.length,
+        tiresTotal: totalItems
+    }
+
+    await updateSystemState(newState, env);
 
     return hasNextPage
 }
@@ -190,6 +213,16 @@ export async function deleteTires(offset: number, limit: number, env: Env, lastU
     await recursiveExecute(deletedTireIds, env, 'tires', bulkDeleteProductsById)
 
     console.log(`${getCurrentTime()} Deleted ${offset + items.length} tires out of ${totalItems}, changed after ${lastUpdateDate}`);
+    
+    const currentState: TSystemState = (await getSystemState(env) || EMPTY_SYSTEM_STATE);
+    const newState: TSystemState = {
+        ...currentState,
+        status: currentState.status === 'Stopped' ? 'Stopped' : 'Updating',
+        tiresProcessed: offset + items.length,
+        tiresTotal: totalItems
+    }
+
+    await updateSystemState(newState, env);
 
     return hasNextPage;
 }

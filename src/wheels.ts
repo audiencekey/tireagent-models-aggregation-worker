@@ -9,7 +9,11 @@ import {
     TRebate,
     checkAndDeleteRebates,
     bulkDeleteProductsById,
-    asyncDelay
+    asyncDelay,
+    TSystemState,
+    getSystemState,
+    EMPTY_SYSTEM_STATE,
+    updateSystemState
 } from './common';
 
 export type TWheelProduct = {
@@ -76,6 +80,15 @@ export async function collectWheels(offset: number, limit: number, env: Env): Pr
     }
 
     console.log(`${getCurrentTime()} Collected ${offset + items.length} wheels out of ${totalItems}`);
+    const currentState: TSystemState = (await getSystemState(env) || EMPTY_SYSTEM_STATE);
+        const newState: TSystemState = {
+            ...currentState,
+            status: currentState.status === 'Stopped' ? 'Stopped' : 'Collecting',
+            wheelsProcessed: offset + items.length,
+            wheelsTotal: totalItems
+        }
+    
+        await updateSystemState(newState, env);
 
     return hasNextPage;
 }
@@ -154,6 +167,16 @@ export async function updateWheels(offset: number, limit: number, env: Env, last
 
     console.log(`${getCurrentTime()} Updated ${offset + items.length} wheels out of ${totalItems}, changed after ${lastUpdateDate}`);
 
+    const currentState: TSystemState = (await getSystemState(env) || EMPTY_SYSTEM_STATE);
+    const newState: TSystemState = {
+        ...currentState,
+        status: currentState.status === 'Stopped' ? 'Stopped' : 'Updating',
+        wheelsProcessed: offset + items.length,
+        wheelsTotal: totalItems
+    }
+
+    await updateSystemState(newState, env);
+
     return hasNextPage;
 }
 
@@ -172,6 +195,16 @@ export async function deleteWheels(offset: number, limit: number, env: Env, last
 
     console.log(`${getCurrentTime()} Deleted ${offset + items.length} wheels out of ${totalItems}, changed after ${lastUpdateDate}`);
 
+    const currentState: TSystemState = (await getSystemState(env) || EMPTY_SYSTEM_STATE);
+    const newState: TSystemState = {
+        ...currentState,
+        status: currentState.status === 'Stopped' ? 'Stopped' : 'Updating',
+        wheelsProcessed: offset + items.length,
+        wheelsTotal: totalItems
+    }
+
+    await updateSystemState(newState, env);
+    
     return hasNextPage;
 }
 
