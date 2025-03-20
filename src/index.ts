@@ -277,7 +277,13 @@ export async function handleDeleteAction(type: TProductType, offset: number, las
 			await env.MODELS_AGGREGATION_FETCH_QUEUE.send(JSON.stringify(message));
 		} else {
 			updateLastUpdatedDate(env);
+
+			updateLastUpdatedDate(env);
 			console.log(getCurrentTime(), 'No more products to update');
+
+			const currentState: TSystemState = (await getSystemState(env)) || EMPTY_SYSTEM_STATE;
+			const newState: TSystemState = {...currentState, status: 'Finished'};
+			await updateSystemState(newState, env);
 		}
 	}
 }
