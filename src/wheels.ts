@@ -199,8 +199,6 @@ export async function deleteWheels(offset: number, limit: number, env: Env, last
     const newState: TSystemState = {
         ...currentState,
         status: currentState.status === 'Stopped' ? 'Stopped' : 'Updating',
-        wheelsProcessed: offset + items.length,
-        wheelsTotal: totalItems
     }
 
     await updateSystemState(newState, env);
