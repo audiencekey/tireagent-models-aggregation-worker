@@ -178,6 +178,24 @@ export async function updateTires(offset: number, limit: number, env: Env, lastU
     }
     
     const { items, hasNextPage, totalItems }: TTiresFetchData = await fetchTires(offset, limit, env, 0, lastUpdateDate);
+
+    const brandNames = new Set<string>();
+    const models: Record<string, TModel> = {};
+
+    for (let item of items) {
+        brandNames.add(item.brand);
+        models[item.modelName] = {
+            modelName: item.modelName,
+            brandName: item.brand,
+            // skip modelTaxonId property for tires since API fails to return some products with that specific property
+            modelTaxonId: 'unset'
+        };
+    }
+    // Need delay between different entities save due to D1 save lag.
+    await recursiveExecute(Array.from(brandNames), env, 'tires', addBulkBrands);
+    await asyncDelay(1000);
+    await recursiveExecute(Object.values(models), env, 'tires', addBulkModels);
+    await asyncDelay(1000);
     
     for (let item of items) {
         const res = await addTireProduct(item, env);
@@ -415,7 +433,7 @@ async function addTireProduct(productData: TTireProduct, env: Env): Promise<bool
 
     try {
 
-        await env.MODELS_AGGREGATION_DB.prepare(query)
+        await env.AK_PRODUCTS_D1.prepare(query)
             .bind(...values)
             .run();
         return true;

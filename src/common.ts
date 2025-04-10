@@ -65,7 +65,7 @@ export async function addBulkBrands(brandNames: string[], env: Env, type: TProdu
 	`;
 
     try {
-        env.MODELS_AGGREGATION_DB.prepare(query)
+        env.AK_PRODUCTS_D1.prepare(query)
             .bind(...brandNames)
             .run();
     } catch (e) {
@@ -90,7 +90,7 @@ export async function addBulkModels(modelsData: TModel[], env: Env, type: TProdu
 			VALUES ${values};`;
 
     try {
-        await env.MODELS_AGGREGATION_DB.prepare(query)
+        await env.AK_PRODUCTS_D1.prepare(query)
             .bind(...parsedModelsData.flat())
             .run();
     } catch (e) {
@@ -184,7 +184,7 @@ export async function addBulkRebates(rebates: TRebate[], env: Env, type: TProduc
     const preparedRebates = rebates.map(rebate => convertRebateToArray(rebate));
 
     try {
-        await env.MODELS_AGGREGATION_DB.prepare(query)
+        await env.AK_PRODUCTS_D1.prepare(query)
             .bind(...preparedRebates.flat())
             .run();
     } catch (e) {
@@ -235,7 +235,7 @@ export async function bulkDeleteRebatesById(ids: string[], env: Env, type: TProd
     const query = `DELETE FROM ${table} WHERE id IN (${ids})`;
 
     try {
-        await env.MODELS_AGGREGATION_DB.prepare(query)
+        await env.AK_PRODUCTS_D1.prepare(query)
             .run();
         console.log(getCurrentTime(), `Deleted ${table} with id ${ids}`);
 
@@ -263,7 +263,7 @@ export async function bulkDeleteProductsById(ids: string[], env: Env, type: TPro
     const query = `DELETE FROM ${table} WHERE id IN (${ids})`;
 
     try {
-        await env.MODELS_AGGREGATION_DB.prepare(query)
+        await env.AK_PRODUCTS_D1.prepare(query)
             .run();
         console.log(getCurrentTime(), `Deleted ${table} with id ${ids}`);
 
@@ -279,7 +279,7 @@ export function getCurrentTime(): string {
 
 // get all entries from the D1 database by given query
 export async function getAllEntriesFromDbByQuery(query: string, env: Env) {
-    return await env.MODELS_AGGREGATION_DB.prepare(query)
+    return await env.AK_PRODUCTS_D1.prepare(query)
         .all();
 }
 
@@ -301,6 +301,9 @@ export function getResponse(content: string): Response {
 			</div>
 			<div>
 				<a href="/update">UPDATE PARSED DATA</a>
+			</div>
+            <div>
+				<a href="/test-aggregation">TEST MODELS AGGREGATION</a>
 			</div>
             <div style="flex: 1 1 100%; text-align: right">
                 <a href="/logout">Logout</a>

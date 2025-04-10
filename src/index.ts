@@ -1,7 +1,6 @@
 import { FREE_ACCESS_ROUTES, getNewSession, PROTECTEDR_ROUTES } from './auth';
-import { EMPTY_SYSTEM_STATE, getCurrentTime, getResponse, getSystemState, TProductType, TRawQueueMessage, TSystemState, TSystemStatus, updateLastUpdatedDate, updateSystemState } from './common';
-import { handleLogout, initializeDatabase, previewData, showHomePage, showLoginPage, showRegisterPage, startCollecting, startUpdating, stopProcessing } from './get-handlers';
-import { initTablesStmt } from './init';
+import { EMPTY_SYSTEM_STATE, getCurrentTime, getSystemState, TProductType, TRawQueueMessage, TSystemState, updateLastUpdatedDate, updateSystemState } from './common';
+import { handleLogout, initializeDatabase, previewData, showHomePage, showLoginPage, showRegisterPage, startCollecting, startUpdating, stopProcessing, testAggregation } from './get-handlers';
 import { handleLogin, handleRegister } from './post-handlers';
 import { collectTires, deleteTires, updateTires } from './tires';
 import { collectWheels, deleteWheels, updateWheels } from './wheels';
@@ -58,6 +57,7 @@ export default {
 			'/login': showLoginPage,
 			'/register': showRegisterPage,
 			'/logout': handleLogout,
+			'/test-aggregation': testAggregation,
 			'/': showHomePage,
 			// '/export': exportDatabase
 		};
@@ -201,6 +201,8 @@ export async function handleUpdateAction(type: TProductType, offset: number, las
 
 	if (hasNextPage === null) {
 		console.log(getCurrentTime(), 'Failed to update products');
+		const state = await getSystemState(env);
+		await updateSystemState({...state, status: 'Failed'} as TSystemState, env);
 		return;
 	}
 

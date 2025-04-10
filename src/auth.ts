@@ -29,6 +29,7 @@ export const PROTECTEDR_ROUTES = [
     '/update',
     '/preview',
     '/logout',
+    '/test-aggregation',
     '/'
 ];
 export async function getNewSession(request: Request, env: Env): Promise<string | null> {

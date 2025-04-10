@@ -49,9 +49,9 @@ ENCRYPTION_KEY = "UlE6ywMb5EVTTw1L0W2e4UpuLX6cC2a9lZX5eOgZsXA="
 # Bind a D1 database. D1 is Cloudflare’s native serverless SQL database.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#d1-databases
 [[d1_databases]]
-binding = "MODELS_AGGREGATION_DB"
-database_name = "models-aggregation"
-database_id = "b717771c-4795-4261-b76c-39ea6136470c"
+binding = "AK_PRODUCTS_D1"
+database_name = "products"
+database_id = "57cc4fc9-edd4-43f9-8e11-dbff8edef5c6"
 
 # Bind a dispatch namespace. Use Workers for Platforms to deploy serverless functions programmatically on behalf of your customers.
 # Docs: https://developers.cloudflare.com/workers/wrangler/configuration/#dispatch-namespace-bindings-workers-for-platforms

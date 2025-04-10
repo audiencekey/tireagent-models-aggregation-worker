@@ -158,6 +158,25 @@ export async function updateWheels(offset: number, limit: number, env: Env, last
 
     const { items, hasNextPage, totalItems }: TWheelsFetchData = await fetchWheels(offset, limit, env, 0, lastUpdateDate);
 
+    const brandNames = new Set<string>();
+    const models: Record<string, TModel> = {};
+
+    for (let item of items) {
+        brandNames.add(item.brand);
+        // none instead of modelTaxonId since API doesn't return that value for allWheels query
+        models[item.modelName] = {
+            modelName: item.modelName,
+            brandName: item.brand,
+            modelTaxonId: 'none'
+        };
+    }
+    
+    // Need delay between different entities save due to D1 save lag.
+    await recursiveExecute(Array.from(brandNames), env, 'wheels', addBulkBrands);
+    await asyncDelay(1000);
+    await recursiveExecute(Object.values(models), env, 'wheels', addBulkModels);
+    await asyncDelay(1000);
+
     for (let item of items) {
         const res = await addWheelProduct(item, env);
         if (!res) {
@@ -359,7 +378,7 @@ async function addWheelProduct(productData: TWheelProduct, env: Env) {
     ];
 
     try {
-        await env.MODELS_AGGREGATION_DB.prepare(query)
+        await env.AK_PRODUCTS_D1.prepare(query)
             .bind(...values)
             .run();
 

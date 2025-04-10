@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS TireModels (
     modelId INTEGER PRIMARY KEY AUTOINCREMENT, 
     modelName TEXT UNIQUE NOT NULL, 
     modelTaxonId TEXT,
-    brandName INTEGER,
+    brandName TEXT,
     FOREIGN KEY(BrandName) REFERENCES TireBrands(brandName)
 );
 
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS WheelModels (
     modelId INTEGER PRIMARY KEY AUTOINCREMENT, 
     modelName TEXT UNIQUE NOT NULL, 
     modelTaxonId TEXT,
-    brandName INTEGER,
+    brandName TEXT,
     FOREIGN KEY(brandName) REFERENCES WheelBrands(brandName)
 );
 
