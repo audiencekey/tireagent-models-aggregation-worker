@@ -422,7 +422,7 @@ async function addTireProduct(productData: TTireProduct, env: Env): Promise<bool
         productData.treadwear,
         productData.url,
         productData.utqg,
-        productData.warranty,
+        productData.warranty.replace(',', ''),
         productData.size.aspectRatio,
         productData.size.diameter,
         productData.size.width,
